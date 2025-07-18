@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CrisperWhisper Speech-to-Text
+Groq Whisper Large v3 Turbo Speech-to-Text
 Supports both X11 and Wayland with automatic detection
 """
 
@@ -15,84 +15,32 @@ import wave
 import os
 import sys
 from pathlib import Path
+from groq import Groq
 
 class SpeechToTextService:
     def __init__(self):
-        print("🔄 Loading CrisperWhisper model...")
-        try:
-            from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline
-            import torch
-            
-            model_name = "nyrahealth/CrisperWhisper"
-            
-            # Check GPU memory and decide device
-            if torch.cuda.is_available():
-                gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
-                if gpu_memory < 6.0:  # Less than 6GB, use CPU to avoid OOM
-                    print(f"⚠️  GPU has {gpu_memory:.1f}GB memory, using CPU to avoid OOM")
-                    self.device = "cpu"
-                    self.torch_dtype = torch.float32
-                else:
-                    self.device = "cuda:0"
-                    self.torch_dtype = torch.float16
-            else:
-                self.device = "cpu"
-                self.torch_dtype = torch.float32
-            
-            # Load model and processor
-            try:
-                self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
-                    model_name, 
-                    torch_dtype=self.torch_dtype, 
-                    low_cpu_mem_usage=True, 
-                    use_safetensors=True,
-                    attn_implementation="eager"  # Fix attention warning
-                )
-            except Exception as e:
-                print(f"⚠️  Falling back to basic model loading: {e}")
-                self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
-                    model_name, 
-                    torch_dtype=self.torch_dtype,
-                    attn_implementation="eager"
-                )
-            self.model.to(self.device)
-            
-            self.processor = AutoProcessor.from_pretrained(model_name)
-            
-            # Create pipeline for speech recognition with memory-efficient settings
-            batch_size = 1 if self.device == "cpu" else 8  # Smaller batch for CPU/low memory
-            self.pipe = pipeline(
-                "automatic-speech-recognition",
-                model=self.model,
-                tokenizer=self.processor.tokenizer,
-                feature_extractor=self.processor.feature_extractor,
-                chunk_length_s=30,
-                batch_size=batch_size,
-                return_timestamps='word',
-                torch_dtype=self.torch_dtype,
-                device=self.device,
-            )
-            
-            # Check if CUDA is available
-            if torch.cuda.is_available():
-                device_name = torch.cuda.get_device_name(0)
-                print(f"✅ Model loaded successfully on GPU: {device_name}")
-            else:
-                print("✅ Model loaded successfully on CPU")
-                
-        except ImportError as e:
-            print(f"❌ Error importing transformers: {e}")
-            print("Install with: pip install accelerate 'git+https://github.com/nyrahealth/transformers.git@crisper_whisper'")
-            sys.exit(1)
-        except Exception as e:
-            print(f"❌ Error loading model: {e}")
+        print("🔄 Initializing Groq Whisper Large v3 Turbo...")
+        
+        # Get API key from environment
+        api_key = os.getenv('GROQ_API_KEY')
+        if not api_key:
+            print("❌ GROQ_API_KEY environment variable not set!")
+            print("Please set your Groq API key:")
+            print("export GROQ_API_KEY='your_api_key_here'")
             sys.exit(1)
         
-        # Audio settings (will adjust based on device capabilities)
+        try:
+            self.client = Groq(api_key=api_key)
+            print("✅ Groq client initialized successfully")
+        except Exception as e:
+            print(f"❌ Error initializing Groq client: {e}")
+            sys.exit(1)
+        
+        # Audio settings
         self.chunk = 1024
         self.format = pyaudio.paInt16
         self.channels = 1
-        self.preferred_rate = 16000  # Model prefers 16kHz
+        self.preferred_rate = 16000  # Whisper models prefer 16kHz
         self.recording = False
         
     def find_input_device(self, audio):
@@ -151,7 +99,7 @@ class SpeechToTextService:
         
         device_id, device_info = device_result
         
-        # Use device's native sample rate if it doesn't support our preferred rate
+        # Use device's native sample rate
         device_rate = int(device_info['defaultSampleRate'])
         if device_rate != self.preferred_rate:
             print(f"ℹ️  Device supports {device_rate}Hz, will resample to {self.preferred_rate}Hz")
@@ -160,13 +108,12 @@ class SpeechToTextService:
             stream = audio.open(
                 format=self.format,
                 channels=self.channels,
-                rate=device_rate,  # Use device's native rate
+                rate=device_rate,
                 input=True,
                 input_device_index=device_id,
                 frames_per_buffer=self.chunk
             )
             
-            # Store the actual sample rate used
             self.actual_rate = device_rate
             
         except Exception as e:
@@ -210,7 +157,7 @@ class SpeechToTextService:
             with wave.open(temp_file.name, 'wb') as wf:
                 wf.setnchannels(self.channels)
                 wf.setsampwidth(pyaudio.get_sample_size(self.format))
-                wf.setframerate(self.actual_rate)  # Use actual recording rate
+                wf.setframerate(self.actual_rate)
                 wf.writeframes(b''.join(frames))
             
             return temp_file.name
@@ -218,71 +165,32 @@ class SpeechToTextService:
             print(f"❌ Error saving audio: {e}")
             return None
     
-    def adjust_pauses_for_hf_pipeline_output(self, pipeline_output, split_threshold=0.12):
-        """
-        Adjust pause timings by distributing pauses up to the threshold evenly between adjacent words.
-        """
-        if "chunks" not in pipeline_output:
-            return pipeline_output
-            
-        adjusted_chunks = pipeline_output["chunks"].copy()
-
-        for i in range(len(adjusted_chunks) - 1):
-            current_chunk = adjusted_chunks[i]
-            next_chunk = adjusted_chunks[i + 1]
-
-            current_start, current_end = current_chunk["timestamp"]
-            next_start, next_end = next_chunk["timestamp"]
-            pause_duration = next_start - current_end
-
-            if pause_duration > 0:
-                if pause_duration > split_threshold:
-                    distribute = split_threshold / 2
-                else:
-                    distribute = pause_duration / 2
-
-                # Adjust current chunk end time
-                adjusted_chunks[i]["timestamp"] = (current_start, current_end + distribute)
-
-                # Adjust next chunk start time
-                adjusted_chunks[i + 1]["timestamp"] = (next_start - distribute, next_end)
-        
-        pipeline_output["chunks"] = adjusted_chunks
-        return pipeline_output
-
     def transcribe_audio(self, audio_file):
-        """Transcribe audio using CrisperWhisper pipeline"""
+        """Transcribe audio using Groq Whisper Large v3 Turbo"""
         if not audio_file or not os.path.exists(audio_file):
             print("❌ Invalid audio file")
             return ""
         
         try:
-            print("🔄 Transcribing audio...")
+            print("🔄 Transcribing audio with Groq Whisper Large v3 Turbo...")
             
-            # Load audio data
-            audio_data, sample_rate = sf.read(audio_file)
+            # Open and transcribe the audio file
+            with open(audio_file, "rb") as file:
+                transcription = self.client.audio.transcriptions.create(
+                    file=file,
+                    model="whisper-large-v3-turbo",
+                    response_format="json",
+                    temperature=0.0  # Deterministic output
+                )
             
-            # Ensure mono audio
-            if len(audio_data.shape) > 1:
-                audio_data = audio_data.mean(axis=1)
-            
-            # Resample to 16kHz if needed (models expect 16kHz)
-            if sample_rate != self.preferred_rate:
-                import librosa
-                audio_data = librosa.resample(audio_data, orig_sr=sample_rate, target_sr=self.preferred_rate)
-                sample_rate = self.preferred_rate
-                print(f"ℹ️  Resampled audio to {self.preferred_rate}Hz")
-            
-            # Use pipeline for transcription
-            pipeline_output = self.pipe({"array": audio_data, "sampling_rate": sample_rate})
-            
-            # Adjust pauses using the official method
-            adjusted_output = self.adjust_pauses_for_hf_pipeline_output(pipeline_output)
-            
-            # Extract text from the result
-            transcription = adjusted_output.get("text", "")
-            
-            return transcription.strip()
+            # Extract text from response
+            if hasattr(transcription, 'text'):
+                text = transcription.text.strip()
+                print(f"✅ Transcription completed: {len(text)} characters")
+                return text
+            else:
+                print("❌ No text in transcription response")
+                return ""
             
         except Exception as e:
             print(f"❌ Error during transcription: {e}")
@@ -332,6 +240,40 @@ class SpeechToTextService:
         print("📋 Text copied to console:")
         print(f"'{text}'")
         self._suggest_typing_tools()
+    
+    def copy_to_clipboard(self, text):
+        """Copy text to clipboard without typing it"""
+        if not text:
+            print("❌ No text to copy")
+            return False
+        
+        display_server = os.environ.get('XDG_SESSION_TYPE', 'x11')
+        
+        # Try clipboard tools in order of preference based on display server
+        if display_server == 'wayland':
+            clipboard_tools = [
+                ['wl-copy'],
+                ['xclip', '-selection', 'clipboard'],
+                ['xsel', '--clipboard', '--input']
+            ]
+        else:
+            clipboard_tools = [
+                ['xclip', '-selection', 'clipboard'],
+                ['xsel', '--clipboard', '--input'],
+                ['wl-copy']
+            ]
+        
+        for tool in clipboard_tools:
+            try:
+                # Try to use the tool directly
+                subprocess.run(tool, input=text.encode(), check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print(f"📋 Copied to clipboard via {tool[0]}: {text}")
+                return True
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                continue
+        
+        print("❌ No working clipboard tool found")
+        return False
     
     def _type_via_clipboard(self, text):
         """Type text via clipboard (works on both X11 and Wayland)"""
@@ -391,7 +333,7 @@ class SpeechToTextService:
             print("\nFallback (Wayland compatibility):")
             print("  sudo apt install wtype ydotool wl-clipboard")
     
-    def start_continuous_mode(self):
+    def start_continuous_mode(self, copy_to_clipboard=False, no_type=False):
         """Start continuous speech recognition"""
         print("🎤 Starting continuous mode...")
         print("Press Enter to start recording, then Enter again to stop and transcribe")
@@ -419,7 +361,10 @@ class SpeechToTextService:
                 transcription = self.transcribe_audio(self._last_audio_file)
                 if transcription:
                     print(f"📝 Transcribed: {transcription}")
-                    self.type_text(transcription)
+                    if copy_to_clipboard:
+                        self.copy_to_clipboard(transcription)
+                    if not no_type:
+                        self.type_text(transcription)
                 else:
                     print("❌ No speech detected")
                 
@@ -434,7 +379,7 @@ class SpeechToTextService:
         self._last_audio_file = self.record_audio()
 
 def main():
-    parser = argparse.ArgumentParser(description='NVIDIA Canary Speech-to-Text')
+    parser = argparse.ArgumentParser(description='Groq Whisper Large v3 Turbo Speech-to-Text')
     parser.add_argument('--file', '-f', help='Transcribe audio file')
     parser.add_argument('--continuous', '-c', action='store_true', 
                        help='Start continuous speech recognition')
@@ -442,6 +387,8 @@ def main():
                        help='Recording duration in seconds (default: 5)')
     parser.add_argument('--no-type', action='store_true',
                        help='Don\'t type the result, just print it')
+    parser.add_argument('--copy-to-clipboard', action='store_true',
+                       help='Copy transcribed text to clipboard')
     
     args = parser.parse_args()
     
@@ -461,6 +408,8 @@ def main():
         transcription = stt_service.transcribe_audio(args.file)
         if transcription:
             print(f"📝 Transcription: {transcription}")
+            if args.copy_to_clipboard:
+                stt_service.copy_to_clipboard(transcription)
             if not args.no_type:
                 stt_service.type_text(transcription)
         else:
@@ -469,7 +418,10 @@ def main():
     elif args.continuous:
         # Start continuous mode
         try:
-            stt_service.start_continuous_mode()
+            stt_service.start_continuous_mode(
+                copy_to_clipboard=args.copy_to_clipboard,
+                no_type=args.no_type
+            )
         except KeyboardInterrupt:
             print("\n👋 Goodbye!")
         
@@ -486,6 +438,8 @@ def main():
             transcription = stt_service.transcribe_audio(audio_file)
             if transcription:
                 print(f"📝 Transcription: {transcription}")
+                if args.copy_to_clipboard:
+                    stt_service.copy_to_clipboard(transcription)
                 if not args.no_type:
                     stt_service.type_text(transcription)
             else:

@@ -3,10 +3,27 @@
 
 cd "$(dirname "$0")"
 
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
 # Check if virtual environment exists
 if [ ! -d "venv" ]; then
-    echo "❌ Virtual environment not found!"
+    echo -e "${RED}❌ Virtual environment not found!${NC}"
     echo "Run install.sh first"
+    exit 1
+fi
+
+# Check for API key
+if [ -z "$GROQ_API_KEY" ]; then
+    echo -e "${RED}❌ GROQ_API_KEY environment variable not set!${NC}"
+    echo -e "${YELLOW}Set your API key first:${NC}"
+    echo "export GROQ_API_KEY='your_api_key_here'"
+    echo ""
+    echo -e "${YELLOW}Or add it to your ~/.bashrc or ~/.zshrc:${NC}"
+    echo "echo 'export GROQ_API_KEY=\"your_api_key_here\"' >> ~/.bashrc"
     exit 1
 fi
 
@@ -17,9 +34,9 @@ source venv/bin/activate
 export DISPLAY=${DISPLAY:-:0}
 
 # Run the hotkey service
-echo "🎤 Starting Speech-to-Text Hotkey Service..."
-echo "Press Super+P and hold to record, release to transcribe"
-echo "Press Ctrl+C to quit"
+echo -e "${GREEN}🎤 Starting Speech-to-Text Hotkey Service...${NC}"
+echo -e "${GREEN}📱 Press Super+Space to start recording, press again to stop and transcribe${NC}"
+echo -e "${YELLOW}🛑 Press Ctrl+C to quit${NC}"
 echo ""
 
 python speech_hotkey.py

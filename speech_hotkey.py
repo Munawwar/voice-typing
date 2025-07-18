@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 System-wide hotkey service for speech-to-text
-Listens for Super+P and activates speech recognition
+Listens for Super+Space and toggles speech recognition
 """
 
 import subprocess
@@ -51,14 +51,14 @@ class HotkeyService:
             
             self.current_keys.add(key)
             
-            # Check for Super+P combination
+            # Check for Super+Space combination
             super_pressed = (keyboard.Key.cmd in self.current_keys or 
                            keyboard.Key.cmd_l in self.current_keys or 
                            keyboard.Key.cmd_r in self.current_keys)
-            p_pressed = keyboard.KeyCode.from_char('p') in self.current_keys
+            space_pressed = keyboard.Key.space in self.current_keys
             
-            if super_pressed and p_pressed and not self.recording:
-                self.start_recording()
+            if super_pressed and space_pressed:
+                self.toggle_recording()
                     
         except AttributeError:
             # Special keys might not have char representation
@@ -72,15 +72,18 @@ class HotkeyService:
             from pynput import keyboard
             
             self.current_keys.discard(key)
-            
-            # Stop recording when P is released during hotkey
-            if key == keyboard.KeyCode.from_char('p') and self.recording:
-                self.stop_recording()
                 
         except AttributeError:
             pass
         except Exception as e:
             print(f"⚠️ Key release error: {e}")
+    
+    def toggle_recording(self):
+        """Toggle recording state"""
+        if self.recording:
+            self.stop_recording()
+        else:
+            self.start_recording()
     
     def start_recording(self):
         """Start recording audio"""
@@ -95,7 +98,7 @@ class HotkeyService:
             subprocess.run([
                 'notify-send', 
                 'Speech Recognition', 
-                'Recording started... Release Super+P to transcribe',
+                'Recording started... Press Super+Space again to stop and transcribe',
                 '--icon=audio-input-microphone',
                 '--expire-time=2000'
             ], capture_output=True)
@@ -218,6 +221,9 @@ class HotkeyService:
                 # Small delay to ensure hotkey is fully released
                 time.sleep(0.2)
                 
+                # Copy to clipboard first
+                self.stt_service.copy_to_clipboard(transcription)
+                
                 # Type the text
                 self.stt_service.type_text(transcription)
                 
@@ -242,13 +248,12 @@ class HotkeyService:
     def _show_success_notification(self, text):
         """Show success notification"""
         try:
-            display_text = text[:100] + "..." if len(text) > 100 else text
             subprocess.run([
                 'notify-send', 
                 'Speech Recognition', 
-                f'Transcribed: {display_text}',
+                'Transcription complete',
                 '--icon=dialog-information',
-                '--expire-time=5000'
+                '--expire-time=3000'
             ], capture_output=True)
         except:
             pass
@@ -266,6 +271,7 @@ class HotkeyService:
         except:
             pass
     
+    
     def start_service(self):
         """Start the hotkey listener service"""
         try:
@@ -276,7 +282,7 @@ class HotkeyService:
             sys.exit(1)
         
         print("🎧 Speech-to-text hotkey service started")
-        print("📱 Press Super+P and hold to record, release to transcribe")
+        print("📱 Press Super+Space to start recording, press again to stop and transcribe")
         print("🛑 Press Ctrl+C to quit")
         print("")
         
@@ -285,7 +291,7 @@ class HotkeyService:
             subprocess.run([
                 'notify-send', 
                 'Speech-to-Text Service', 
-                'Service started! Use Super+P to record',
+                'Service started! Use Super+Space to record',
                 '--icon=audio-input-microphone',
                 '--expire-time=3000'
             ], capture_output=True)

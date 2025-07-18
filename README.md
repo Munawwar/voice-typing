@@ -1,53 +1,56 @@
-# Speech-to-Text with CrisperWhisper
+# Speech-to-Text with Groq Whisper Large v3 Turbo
 
-A lightweight, accurate speech-to-text system using nyrahealth/CrisperWhisper. Press Super+P to record, release to transcribe instantly!
+Voice type into any text field in Ubuntu via hotkey (Super + Space)
 
-## Installation
-
-1. **Run the installer:**
-   ```bash
-   ./install.sh
-   ```
-
-2. **Start the service:**
-   ```bash
-   ./run.sh
-   ```
+Tested on Ubuntu 24 X11 (Wayland untested)
 
 ## Quick Start
 
-- **Hotkey mode:** Press `Super+P`, speak, release to transcribe
-- **Single recording:** `python speech_to_text.py -d 5` (record for 5 seconds)
-- **Test audio:** `python test_installation.py`
+```bash
+# First time run
+GROQ_API_KEY='your_api_key_here' ./install.sh
 
-## Features
+# Future runs
+GROQ_API_KEY='your_api_key_here' ./run.sh
+```
 
-- **🎤 System-wide hotkey** - Works in any application
-- **🚀 Fast startup** - No massive dependencies 
-- **💾 Memory efficient** - Auto-detects GPU memory, falls back to CPU
-- **🔧 Audio smart** - Automatically finds and uses your microphone
-- **📱 Cross-platform** - Supports both X11 and Wayland
+Press `Super+Space` to start recording, press again to stop and transcribe.
 
-## Files
+Text is automatically typed to the active window and also copied to clipboard¹.
 
-- `speech_to_text.py` - Main speech recognition engine
-- `speech_hotkey.py` - System-wide hotkey service
-- `run.sh` - Service launcher
-- `install.sh` - One-command setup
-- `requirements.txt` - Python dependencies
+¹ Clipboard copy is useful for cases when you were focused on the wrong text field
+
+## Other Uses Cases
+
+1. **Single recording:**
+   ```bash
+   source venv/bin/activate
+   python speech_to_text.py -d 5  # Record for 5 seconds
+   ```
+
+2. **Copy to clipboard:**
+   ```bash
+   python speech_to_text.py --copy-to-clipboard -d 5  # Copy transcription to clipboard
+   ```
+
+## Why Groq Whisper Large v3 Turbo?
+
+- Fast: Can actually run on your tiny laptop vs complex local models. Also Groq especially has made this model even faster.
+- Good accuracy
+- Easy setup: Unlike most local ASR models setup where things like NeMo toolkit is needed, which is a pain to install!
+- Cheap: Free tier available, paid tier is $0.04 per hour of audio
+
+## Code structure
+
+- `speech_to_text.py` - Main speech recognition script
+- `speech_hotkey.py` - System-wide hotkey service  
+- `run.sh` - Easy launcher
+- `test_installation.py` - Test your setup
 
 ## Troubleshooting
 
-- **Audio issues:** `pactl list sources short` to check microphones
-- **GPU issues:** `nvidia-smi` to check GPU memory
-- **Dependencies:** `python test_installation.py` to verify setup
-- **Permissions:** Log out/in after installation for Wayland support
+- Test installation: `python test_installation.py`
+- Check API key: `echo $GROQ_API_KEY`
+- Check audio: `pactl list sources short`
 
-## Why CrisperWhisper?
-
-- **Lightweight:** ~3.5GB total vs ~15GB+ for NVIDIA models
-- **Simple:** Uses standard transformers, no complex NeMo dependencies  
-- **Accurate:** 6.67% WER performance
-- **Smart:** CPU fallback for low-memory GPUs
-- **Compatible:** Works with any microphone, any desktop environment
 

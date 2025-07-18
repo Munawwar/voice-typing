@@ -6,7 +6,7 @@ import subprocess
 def test_imports():
     """Test all required imports"""
     try:
-        import torch
+        import groq
         import soundfile
         import pyaudio  
         import pynput
@@ -14,13 +14,8 @@ def test_imports():
         import subprocess
         
         print("✅ All Python packages imported successfully")
+        print(f"✅ Groq package version: {groq.__version__}")
         
-        # Test PyTorch CUDA
-        if torch.cuda.is_available():
-            print(f"✅ CUDA available: {torch.cuda.get_device_name(0)}")
-        else:
-            print("ℹ️  CUDA not available, using CPU")
-            
         return True
     except ImportError as e:
         print(f"❌ Import error: {e}")
@@ -49,15 +44,15 @@ def test_system_tools():
     
     return success
 
-def test_transformers():
-    """Test transformers import"""
-    try:
-        from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
-        import accelerate
-        print("✅ Transformers available")
+def test_groq_api_key():
+    """Test GROQ_API_KEY environment variable"""
+    api_key = os.environ.get('GROQ_API_KEY')
+    if api_key:
+        print("✅ GROQ_API_KEY environment variable is set")
         return True
-    except ImportError as e:
-        print(f"⚠️  Transformers import issue: {e}")
+    else:
+        print("⚠️  GROQ_API_KEY environment variable not set")
+        print("   Set it with: export GROQ_API_KEY='your_api_key_here'")
         return False
 
 if __name__ == "__main__":
@@ -67,7 +62,7 @@ if __name__ == "__main__":
     tests = [
         ("Python packages", test_imports),
         ("System tools", test_system_tools), 
-        ("Transformers", test_transformers)
+        ("Groq API key", test_groq_api_key)
     ]
     
     results = []
@@ -79,8 +74,9 @@ if __name__ == "__main__":
     if all(results):
         print("🎉 All tests passed! Installation successful!")
         print("\nNext steps:")
-        print("1. Copy speech_to_text.py and speech_hotkey.py to this directory")
-        print("2. Run: ./run_speech_service.sh")
+        print("1. Run: ./run.sh")
     else:
         print("⚠️  Some tests failed. Check the output above.")
+        if not os.environ.get('GROQ_API_KEY'):
+            print("💡 Don't forget to set your GROQ_API_KEY!")
         sys.exit(1)

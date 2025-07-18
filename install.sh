@@ -23,8 +23,8 @@ if [[ $EUID -eq 0 ]]; then
    exit 1
 fi
 
-echo "🎤 CrisperWhisper Speech-to-Text Lightweight Installer"
-echo "======================================================"
+echo "🎤 Groq Whisper Large v3 Turbo Speech-to-Text Installer"
+echo "========================================================"
 
 # Step 1: Check Python version
 log_info "Checking Python version..."
@@ -52,25 +52,14 @@ if [[ -z "$PYTHON_CMD" ]]; then
     exit 1
 fi
 
-# Step 2: Check GPU availability (optional)
-log_info "Checking GPU availability..."
-GPU_AVAILABLE=false
-CUDA_VERSION=""
-
-if lspci | grep -i nvidia >/dev/null; then
-    GPU_NAME=$(lspci | grep -i nvidia | head -n1 | cut -d':' -f3 | xargs)
-    log_success "NVIDIA GPU detected: $GPU_NAME"
-    
-    if command -v nvidia-smi >/dev/null 2>&1; then
-        DRIVER_VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits | head -n1)
-        CUDA_VERSION=$(nvidia-smi | grep "CUDA Version" | sed -n 's/.*CUDA Version: \([0-9.]*\).*/\1/p')
-        log_success "NVIDIA drivers installed: $DRIVER_VERSION (CUDA $CUDA_VERSION)"
-        GPU_AVAILABLE=true
-    else
-        log_warning "NVIDIA GPU found but drivers not installed - using CPU mode"
-    fi
+# Step 2: Check for GROQ_API_KEY environment variable
+log_info "Checking for Groq API key..."
+if [[ -z "$GROQ_API_KEY" ]]; then
+    log_warning "GROQ_API_KEY environment variable not set"
+    log_info "You'll need to set this before running the service:"
+    log_info "export GROQ_API_KEY='your_api_key_here'"
 else
-    log_info "No NVIDIA GPU detected - using CPU mode (works fine!)"
+    log_success "GROQ_API_KEY environment variable is set"
 fi
 
 # Step 3: Install system dependencies
@@ -180,119 +169,42 @@ else
     log_info "Using existing virtual environment"
 fi
 
-# Step 6: Install PyTorch (simpler now!)
-PYTORCH_INSTALLED=false
-if python -c "import torch; print('PyTorch version:', torch.__version__)" 2>/dev/null; then
-    log_success "PyTorch already installed"
-    PYTORCH_INSTALLED=true
+# Step 6: Install Python dependencies from requirements.txt
+log_info "Installing Python dependencies..."
+
+# Install from requirements.txt
+if [[ -f "requirements.txt" ]]; then
+    log_info "Installing dependencies from requirements.txt..."
+    pip install -r requirements.txt
 else
-    log_info "Installing PyTorch..."
+    log_error "requirements.txt not found!"
+    exit 1
 fi
 
-if [[ "$PYTORCH_INSTALLED" == false ]]; then
-    if [[ "$GPU_AVAILABLE" == true ]]; then
-        log_info "Installing PyTorch with CUDA support..."
-        pip install torch torchaudio --index-url "https://download.pytorch.org/whl/cu121"
-    else
-        log_info "Installing CPU-only PyTorch..."
-        pip install torch torchaudio --index-url "https://download.pytorch.org/whl/cpu"
-    fi
-fi
-
-# Step 7: Test PyTorch installation
-log_info "Testing PyTorch installation..."
+# Step 7: Test Groq package installation
+log_info "Testing Groq package installation..."
 python -c "
-import torch
-print(f'PyTorch version: {torch.__version__}')
-print(f'CUDA available: {torch.cuda.is_available()}')
-if torch.cuda.is_available():
-    print(f'GPU device: {torch.cuda.get_device_name(0)}')
-    print(f'GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB')
-else:
-    print('Running in CPU mode')
+import groq
+print(f'Groq package version: {groq.__version__}')
+print('✅ Groq package installed successfully')
 " || {
-    log_error "PyTorch test failed!"
+    log_error "Groq package test failed!"
     exit 1
 }
 
-log_success "PyTorch installation successful!"
+log_success "All dependencies installed successfully!"
 
-# Step 8: Install Python dependencies (much simpler!)
-log_info "Installing Python dependencies..."
-
-# Check and install basic dependencies
-DEPS_TO_INSTALL=()
-for dep in "soundfile" "pyaudio" "pynput" "accelerate" "librosa"; do
-    if ! python -c "import $dep" 2>/dev/null; then
-        DEPS_TO_INSTALL+=("$dep")
-    else
-        log_success "$dep already installed"
-    fi
-done
-
-if [[ ${#DEPS_TO_INSTALL[@]} -gt 0 ]]; then
-    log_info "Installing missing dependencies: ${DEPS_TO_INSTALL[*]}"
-    pip install "${DEPS_TO_INSTALL[@]}"
+# Step 8: Ensure run.sh is executable
+log_info "Setting up launcher script..."
+if [ -f "run.sh" ]; then
+    chmod +x run.sh
+    log_success "run.sh is ready"
 else
-    log_success "All basic dependencies already installed"
-fi
-
-# Step 9: Install CrisperWhisper transformers fork
-log_info "Installing CrisperWhisper transformers fork..."
-TRANSFORMERS_INSTALLED=false
-if python -c "from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline; print('CrisperWhisper transformers available')" 2>/dev/null; then
-    log_success "CrisperWhisper transformers already installed"
-    TRANSFORMERS_INSTALLED=true
-else
-    log_info "Installing CrisperWhisper transformers fork..."
-fi
-
-if [[ "$TRANSFORMERS_INSTALLED" == false ]]; then
-    log_info "Installing from GitHub fork..."
-    pip install "git+https://github.com/nyrahealth/transformers.git@crisper_whisper"
-    
-    # Verify installation
-    if python -c "from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline; print('✅ CrisperWhisper transformers working')" 2>/dev/null; then
-        log_success "CrisperWhisper transformers installation successful!"
-    else
-        log_error "CrisperWhisper transformers test failed!"
-        exit 1
-    fi
-fi
-
-# Step 10: Create launcher script
-log_info "Creating launcher script..."
-cat > run_speech_service.sh << 'EOF'
-#!/bin/bash
-# Speech-to-Text Service Launcher
-
-cd "$(dirname "$0")"
-
-# Check if virtual environment exists
-if [ ! -d "venv" ]; then
-    echo "❌ Virtual environment not found!"
-    echo "Run install.sh first"
+    log_error "run.sh not found!"
     exit 1
 fi
 
-# Activate virtual environment
-source venv/bin/activate
-
-# Set display environment
-export DISPLAY=${DISPLAY:-:0}
-
-# Run the hotkey service
-echo "🎤 Starting Speech-to-Text Hotkey Service..."
-echo "Press Super+P and hold to record, release to transcribe"
-echo "Press Ctrl+C to quit"
-echo ""
-
-python speech_hotkey.py
-EOF
-
-chmod +x run_speech_service.sh
-
-# Step 11: Verify required files exist
+# Step 9: Verify required files exist
 log_info "Verifying required Python scripts..."
 
 # Check if the required files exist in the current directory
@@ -306,7 +218,7 @@ fi
 log_success "Required Python scripts found"
 chmod +x speech_to_text.py speech_hotkey.py
 
-# Step 12: Test installation
+# Step 10: Test installation
 log_info "Testing complete installation..."
 
 # Create test script
@@ -319,7 +231,7 @@ import subprocess
 def test_imports():
     """Test all required imports"""
     try:
-        import torch
+        import groq
         import soundfile
         import pyaudio  
         import pynput
@@ -327,13 +239,8 @@ def test_imports():
         import subprocess
         
         print("✅ All Python packages imported successfully")
+        print(f"✅ Groq package version: {groq.__version__}")
         
-        # Test PyTorch CUDA
-        if torch.cuda.is_available():
-            print(f"✅ CUDA available: {torch.cuda.get_device_name(0)}")
-        else:
-            print("ℹ️  CUDA not available, using CPU")
-            
         return True
     except ImportError as e:
         print(f"❌ Import error: {e}")
@@ -362,14 +269,15 @@ def test_system_tools():
     
     return success
 
-def test_transformers():
-    """Test transformers import"""
-    try:
-        from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
-        print("✅ Transformers available")
+def test_groq_api_key():
+    """Test GROQ_API_KEY environment variable"""
+    api_key = os.environ.get('GROQ_API_KEY')
+    if api_key:
+        print("✅ GROQ_API_KEY environment variable is set")
         return True
-    except ImportError as e:
-        print(f"⚠️  Transformers import issue: {e}")
+    else:
+        print("⚠️  GROQ_API_KEY environment variable not set")
+        print("   Set it with: export GROQ_API_KEY='your_api_key_here'")
         return False
 
 if __name__ == "__main__":
@@ -379,7 +287,7 @@ if __name__ == "__main__":
     tests = [
         ("Python packages", test_imports),
         ("System tools", test_system_tools), 
-        ("Transformers", test_transformers)
+        ("Groq API key", test_groq_api_key)
     ]
     
     results = []
@@ -391,10 +299,11 @@ if __name__ == "__main__":
     if all(results):
         print("🎉 All tests passed! Installation successful!")
         print("\nNext steps:")
-        print("1. Copy speech_to_text.py and speech_hotkey.py to this directory")
-        print("2. Run: ./run_speech_service.sh")
+        print("1. Run: ./run.sh")
     else:
         print("⚠️  Some tests failed. Check the output above.")
+        if not os.environ.get('GROQ_API_KEY'):
+            print("💡 Don't forget to set your GROQ_API_KEY!")
         sys.exit(1)
 EOF
 
@@ -406,42 +315,54 @@ log_info "Final setup..."
 
 # Create README
 cat > README.md << 'EOF'
-# Speech-to-Text with CrisperWhisper
+# Speech-to-Text with Groq Whisper Large v3 Turbo
 
 ## Quick Start
 
-1. **Start the service:**
+1. **Set your API key:**
    ```bash
-   ./run_speech_service.sh
+   export GROQ_API_KEY='your_api_key_here'
    ```
 
-2. **Use hotkey:** Press `Super+P`, speak, release to transcribe
+2. **Start the service:**
+   ```bash
+   ./run.sh
+   ```
 
-3. **Single recording:**
+3. **Use hotkey:** Press `Super+Space` to start recording, press again to stop and transcribe
+   - Text is automatically copied to clipboard and typed to the active window
+
+4. **Single recording:**
    ```bash
    source venv/bin/activate
    python speech_to_text.py -d 5  # Record for 5 seconds
+   ```
+
+5. **Copy to clipboard:**
+   ```bash
+   python speech_to_text.py --copy-to-clipboard -d 5  # Copy transcription to clipboard
    ```
 
 ## Files
 
 - `speech_to_text.py` - Main speech recognition script
 - `speech_hotkey.py` - System-wide hotkey service  
-- `run_speech_service.sh` - Easy launcher
+- `run.sh` - Easy launcher
 - `test_installation.py` - Test your setup
 
 ## Troubleshooting
 
 - Test installation: `python test_installation.py`
-- Check GPU: `nvidia-smi`
+- Check API key: `echo $GROQ_API_KEY`
 - Check audio: `pactl list sources short`
 
-## Why CrisperWhisper?
+## Why Groq Whisper Large v3 Turbo?
 
-- **Lightweight:** ~3.5GB total vs ~15GB+ for NVIDIA models
-- **Simple:** Uses standard transformers, no complex NeMo dependencies
-- **Accurate:** 6.67% WER performance
-- **Compatible:** Works on CPU or GPU
+- **Ultra-fast:** 216x real-time transcription speed
+- **High accuracy:** OpenAI's best speech recognition model
+- **Cloud-based:** No local model download required
+- **Cost-effective:** $0.04 per hour of audio
+- **Simple:** No GPU or complex dependencies needed
 
 EOF
 
@@ -450,12 +371,13 @@ log_success "Installation completed successfully!"
 echo ""
 echo "📁 Project directory: $PROJECT_DIR"
 echo "🐍 Python version: $($PYTHON_CMD --version)"
-echo "🎮 GPU support: $([[ $GPU_AVAILABLE == true ]] && echo "Yes ($GPU_NAME)" || echo "No (CPU only)")"
+echo "🌐 API: Groq Whisper Large v3 Turbo"
 echo "🖥️  Display server: $DISPLAY_SERVER"
 echo ""
 echo "🚀 Ready to use! Start with:"
+echo "   export GROQ_API_KEY='your_api_key_here'"
 echo "   cd $PROJECT_DIR && ./run.sh"
-echo "📱 Hotkey: Super+P (Windows key + P)"
+echo "📱 Hotkey: Super+Space (Windows key + Space)"
 echo ""
 
 if [[ "$DISPLAY_SERVER" == "wayland" ]] && ! groups "$USER" | grep -q input; then
@@ -463,9 +385,13 @@ if [[ "$DISPLAY_SERVER" == "wayland" ]] && ! groups "$USER" | grep -q input; the
 fi
 
 # Offer to start immediately
-read -p "Start the speech-to-text service now? (Y/n): " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-    log_info "Starting service..."
-    ./run.sh
+if [[ -n "$GROQ_API_KEY" ]]; then
+    read -p "Start the speech-to-text service now? (Y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        log_info "Starting service..."
+        ./run.sh
+    fi
+else
+    log_warning "Set GROQ_API_KEY first, then run ./run.sh"
 fi
