@@ -140,11 +140,23 @@ class HotkeyService:
         
         try:
             audio = pyaudio.PyAudio()
+            
+            # Find best input device (same logic as main service)
+            device_result = self.stt_service.find_input_device(audio)
+            if device_result is None:
+                audio.terminate()
+                self.recording = False
+                return
+            
+            device_id, device_info = device_result
+            device_rate = int(device_info['defaultSampleRate'])
+            
             stream = audio.open(
                 format=format,
                 channels=channels,
-                rate=rate,
+                rate=device_rate,  # Use device's native rate
                 input=True,
+                input_device_index=device_id,
                 frames_per_buffer=chunk
             )
         except Exception as e:
@@ -176,7 +188,7 @@ class HotkeyService:
                 with wave.open(temp_file.name, 'wb') as wf:
                     wf.setnchannels(channels)
                     wf.setsampwidth(audio.get_sample_size(format))
-                    wf.setframerate(rate)
+                    wf.setframerate(device_rate)  # Use actual recording rate
                     wf.writeframes(b''.join(frames))
                 
                 # Transcribe in separate thread to avoid blocking

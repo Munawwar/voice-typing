@@ -49,14 +49,15 @@ def test_system_tools():
     
     return success
 
-def test_nemo():
-    """Test NeMo import"""
+def test_transformers():
+    """Test transformers import"""
     try:
-        import nemo.collections.speechlm
-        print("✅ NeMo Toolkit available")
+        from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
+        import accelerate
+        print("✅ Transformers available")
         return True
     except ImportError as e:
-        print(f"⚠️  NeMo import issue: {e}")
+        print(f"⚠️  Transformers import issue: {e}")
         return False
 
 if __name__ == "__main__":
@@ -66,7 +67,7 @@ if __name__ == "__main__":
     tests = [
         ("Python packages", test_imports),
         ("System tools", test_system_tools), 
-        ("NeMo Toolkit", test_nemo)
+        ("Transformers", test_transformers)
     ]
     
     results = []

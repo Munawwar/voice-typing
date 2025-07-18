@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NVIDIA Canary Qwen 2.5B Speech-to-Text
+CrisperWhisper Speech-to-Text
 Supports both X11 and Wayland with automatic detection
 """
 
@@ -18,53 +18,157 @@ from pathlib import Path
 
 class SpeechToTextService:
     def __init__(self):
-        print("🔄 Loading NVIDIA Canary Qwen 2.5B model...")
+        print("🔄 Loading CrisperWhisper model...")
         try:
-            from nemo.collections.asr.models import ASRModel
+            from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline
             import torch
             
-            self.model = ASRModel.from_pretrained('nvidia/canary-qwen-2.5b')
-            self.model.eval()
+            model_name = "nyrahealth/CrisperWhisper"
+            
+            # Check GPU memory and decide device
+            if torch.cuda.is_available():
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
+                if gpu_memory < 6.0:  # Less than 6GB, use CPU to avoid OOM
+                    print(f"⚠️  GPU has {gpu_memory:.1f}GB memory, using CPU to avoid OOM")
+                    self.device = "cpu"
+                    self.torch_dtype = torch.float32
+                else:
+                    self.device = "cuda:0"
+                    self.torch_dtype = torch.float16
+            else:
+                self.device = "cpu"
+                self.torch_dtype = torch.float32
+            
+            # Load model and processor
+            try:
+                self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                    model_name, 
+                    torch_dtype=self.torch_dtype, 
+                    low_cpu_mem_usage=True, 
+                    use_safetensors=True,
+                    attn_implementation="eager"  # Fix attention warning
+                )
+            except Exception as e:
+                print(f"⚠️  Falling back to basic model loading: {e}")
+                self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                    model_name, 
+                    torch_dtype=self.torch_dtype,
+                    attn_implementation="eager"
+                )
+            self.model.to(self.device)
+            
+            self.processor = AutoProcessor.from_pretrained(model_name)
+            
+            # Create pipeline for speech recognition with memory-efficient settings
+            batch_size = 1 if self.device == "cpu" else 8  # Smaller batch for CPU/low memory
+            self.pipe = pipeline(
+                "automatic-speech-recognition",
+                model=self.model,
+                tokenizer=self.processor.tokenizer,
+                feature_extractor=self.processor.feature_extractor,
+                chunk_length_s=30,
+                batch_size=batch_size,
+                return_timestamps='word',
+                torch_dtype=self.torch_dtype,
+                device=self.device,
+            )
             
             # Check if CUDA is available
             if torch.cuda.is_available():
-                device = torch.cuda.get_device_name(0)
-                print(f"✅ Model loaded successfully on GPU: {device}")
+                device_name = torch.cuda.get_device_name(0)
+                print(f"✅ Model loaded successfully on GPU: {device_name}")
             else:
                 print("✅ Model loaded successfully on CPU")
                 
         except ImportError as e:
-            print(f"❌ Error importing NeMo: {e}")
-            print("Make sure you've run the installation script")
+            print(f"❌ Error importing transformers: {e}")
+            print("Install with: pip install accelerate 'git+https://github.com/nyrahealth/transformers.git@crisper_whisper'")
             sys.exit(1)
         except Exception as e:
             print(f"❌ Error loading model: {e}")
             sys.exit(1)
         
-        # Audio settings for 16kHz mono (required by model)
+        # Audio settings (will adjust based on device capabilities)
         self.chunk = 1024
         self.format = pyaudio.paInt16
         self.channels = 1
-        self.rate = 16000
+        self.preferred_rate = 16000  # Model prefers 16kHz
         self.recording = False
         
+    def find_input_device(self, audio):
+        """Find the best input device"""
+        print("🔍 Looking for microphone...")
+        
+        # Get device count
+        device_count = audio.get_device_count()
+        input_devices = []
+        
+        for i in range(device_count):
+            try:
+                device_info = audio.get_device_info_by_index(i)
+                if device_info['maxInputChannels'] > 0:
+                    input_devices.append((i, device_info))
+                    print(f"  📱 Device {i}: {device_info['name']} ({device_info['maxInputChannels']} channels)")
+            except:
+                continue
+        
+        if not input_devices:
+            print("❌ No input devices found")
+            return None
+        
+        # Prefer USB/headset devices, then default
+        for device_id, device_info in input_devices:
+            name = device_info['name'].lower()
+            if 'usb' in name or 'headset' in name or 'jabra' in name or 'evolve' in name:
+                print(f"✅ Selected: {device_info['name']}")
+                return device_id, device_info
+        
+        # Try the default device
+        try:
+            default_device = audio.get_default_input_device_info()
+            print(f"✅ Using default: {default_device['name']}")
+            return default_device['index'], default_device
+        except:
+            # Use first available device
+            device_id, device_info = input_devices[0]
+            print(f"✅ Using first available: {device_info['name']}")
+            return device_id, device_info
+
     def record_audio(self, duration=None):
         """Record audio from microphone"""
         try:
             audio = pyaudio.PyAudio()
         except Exception as e:
             print(f"❌ Error initializing audio: {e}")
-            print("Make sure pulseaudio is running and microphone is available")
+            print("Make sure pulseaudio/pipewire is running and microphone is available")
             return None
+        
+        # Find the best input device
+        device_result = self.find_input_device(audio)
+        if device_result is None:
+            audio.terminate()
+            return None
+        
+        device_id, device_info = device_result
+        
+        # Use device's native sample rate if it doesn't support our preferred rate
+        device_rate = int(device_info['defaultSampleRate'])
+        if device_rate != self.preferred_rate:
+            print(f"ℹ️  Device supports {device_rate}Hz, will resample to {self.preferred_rate}Hz")
         
         try:
             stream = audio.open(
                 format=self.format,
                 channels=self.channels,
-                rate=self.rate,
+                rate=device_rate,  # Use device's native rate
                 input=True,
+                input_device_index=device_id,
                 frames_per_buffer=self.chunk
             )
+            
+            # Store the actual sample rate used
+            self.actual_rate = device_rate
+            
         except Exception as e:
             print(f"❌ Error opening audio stream: {e}")
             print("Check microphone permissions and availability")
@@ -106,7 +210,7 @@ class SpeechToTextService:
             with wave.open(temp_file.name, 'wb') as wf:
                 wf.setnchannels(self.channels)
                 wf.setsampwidth(pyaudio.get_sample_size(self.format))
-                wf.setframerate(self.rate)
+                wf.setframerate(self.actual_rate)  # Use actual recording rate
                 wf.writeframes(b''.join(frames))
             
             return temp_file.name
@@ -114,8 +218,40 @@ class SpeechToTextService:
             print(f"❌ Error saving audio: {e}")
             return None
     
+    def adjust_pauses_for_hf_pipeline_output(self, pipeline_output, split_threshold=0.12):
+        """
+        Adjust pause timings by distributing pauses up to the threshold evenly between adjacent words.
+        """
+        if "chunks" not in pipeline_output:
+            return pipeline_output
+            
+        adjusted_chunks = pipeline_output["chunks"].copy()
+
+        for i in range(len(adjusted_chunks) - 1):
+            current_chunk = adjusted_chunks[i]
+            next_chunk = adjusted_chunks[i + 1]
+
+            current_start, current_end = current_chunk["timestamp"]
+            next_start, next_end = next_chunk["timestamp"]
+            pause_duration = next_start - current_end
+
+            if pause_duration > 0:
+                if pause_duration > split_threshold:
+                    distribute = split_threshold / 2
+                else:
+                    distribute = pause_duration / 2
+
+                # Adjust current chunk end time
+                adjusted_chunks[i]["timestamp"] = (current_start, current_end + distribute)
+
+                # Adjust next chunk start time
+                adjusted_chunks[i + 1]["timestamp"] = (next_start - distribute, next_end)
+        
+        pipeline_output["chunks"] = adjusted_chunks
+        return pipeline_output
+
     def transcribe_audio(self, audio_file):
-        """Transcribe audio using Canary model"""
+        """Transcribe audio using CrisperWhisper pipeline"""
         if not audio_file or not os.path.exists(audio_file):
             print("❌ Invalid audio file")
             return ""
@@ -123,20 +259,29 @@ class SpeechToTextService:
         try:
             print("🔄 Transcribing audio...")
             
-            # Generate transcription using the model
-            answer_ids = self.model.generate(
-                prompts=[
-                    [{
-                        "role": "user", 
-                        "content": f"Transcribe the following: {self.model.audio_locator_tag}", 
-                        "audio": [audio_file]
-                    }]
-                ],
-                max_new_tokens=128,
-            )
+            # Load audio data
+            audio_data, sample_rate = sf.read(audio_file)
             
-            # Convert to text
-            transcription = self.model.tokenizer.ids_to_text(answer_ids[0].cpu())
+            # Ensure mono audio
+            if len(audio_data.shape) > 1:
+                audio_data = audio_data.mean(axis=1)
+            
+            # Resample to 16kHz if needed (models expect 16kHz)
+            if sample_rate != self.preferred_rate:
+                import librosa
+                audio_data = librosa.resample(audio_data, orig_sr=sample_rate, target_sr=self.preferred_rate)
+                sample_rate = self.preferred_rate
+                print(f"ℹ️  Resampled audio to {self.preferred_rate}Hz")
+            
+            # Use pipeline for transcription
+            pipeline_output = self.pipe({"array": audio_data, "sampling_rate": sample_rate})
+            
+            # Adjust pauses using the official method
+            adjusted_output = self.adjust_pauses_for_hf_pipeline_output(pipeline_output)
+            
+            # Extract text from the result
+            transcription = adjusted_output.get("text", "")
+            
             return transcription.strip()
             
         except Exception as e:

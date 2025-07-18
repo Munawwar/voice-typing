@@ -23,7 +23,7 @@ if [[ $EUID -eq 0 ]]; then
    exit 1
 fi
 
-echo "🎤 NVIDIA Canary Speech-to-Text Comprehensive Installer"
+echo "🎤 CrisperWhisper Speech-to-Text Lightweight Installer"
 echo "======================================================"
 
 # Step 1: Check Python version
@@ -52,8 +52,8 @@ if [[ -z "$PYTHON_CMD" ]]; then
     exit 1
 fi
 
-# Step 2: Check NVIDIA GPU and drivers
-log_info "Checking NVIDIA GPU and drivers..."
+# Step 2: Check GPU availability (optional)
+log_info "Checking GPU availability..."
 GPU_AVAILABLE=false
 CUDA_VERSION=""
 
@@ -67,18 +67,10 @@ if lspci | grep -i nvidia >/dev/null; then
         log_success "NVIDIA drivers installed: $DRIVER_VERSION (CUDA $CUDA_VERSION)"
         GPU_AVAILABLE=true
     else
-        log_warning "NVIDIA GPU found but drivers not installed"
-        log_info "Install drivers with: sudo ubuntu-drivers autoinstall && sudo reboot"
-        
-        read -p "Continue without GPU acceleration? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            log_info "Please install NVIDIA drivers and re-run this script"
-            exit 1
-        fi
+        log_warning "NVIDIA GPU found but drivers not installed - using CPU mode"
     fi
 else
-    log_warning "No NVIDIA GPU detected. Will use CPU-only mode."
+    log_info "No NVIDIA GPU detected - using CPU mode (works fine!)"
 fi
 
 # Step 3: Install system dependencies
@@ -188,7 +180,7 @@ else
     log_info "Using existing virtual environment"
 fi
 
-# Step 6: Install PyTorch
+# Step 6: Install PyTorch (simpler now!)
 PYTORCH_INSTALLED=false
 if python -c "import torch; print('PyTorch version:', torch.__version__)" 2>/dev/null; then
     log_success "PyTorch already installed"
@@ -199,30 +191,11 @@ fi
 
 if [[ "$PYTORCH_INSTALLED" == false ]]; then
     if [[ "$GPU_AVAILABLE" == true ]]; then
-        # Determine CUDA version for PyTorch
-        CUDA_MAJOR=$(echo $CUDA_VERSION | cut -d'.' -f1)
-        CUDA_MINOR=$(echo $CUDA_VERSION | cut -d'.' -f2)
-        
-        if [[ $CUDA_MAJOR -ge 12 ]]; then
-            TORCH_CUDA="cu121"
-            log_info "Installing PyTorch with CUDA 12.1 support..."
-            # Install specific compatible versions for CUDA 12.1
-            pip install torch==2.4.1+cu121 torchaudio==2.4.1+cu121 torchvision==0.19.1+cu121 --index-url "https://download.pytorch.org/whl/cu121"
-        elif [[ $CUDA_MAJOR -eq 11 ]]; then
-            TORCH_CUDA="cu118"  
-            log_info "Installing PyTorch with CUDA 11.8 support..."
-            # Install specific compatible versions for CUDA 11.8
-            pip install torch==2.4.1+cu118 torchaudio==2.4.1+cu118 torchvision==0.19.1+cu118 --index-url "https://download.pytorch.org/whl/cu118"
-        else
-            TORCH_CUDA=""
-            log_warning "Unsupported CUDA version, installing CPU-only PyTorch"
-            # Install specific compatible CPU versions
-            pip install torch==2.4.1 torchaudio==2.4.1 torchvision==0.19.1 --index-url "https://download.pytorch.org/whl/cpu"
-        fi
+        log_info "Installing PyTorch with CUDA support..."
+        pip install torch torchaudio --index-url "https://download.pytorch.org/whl/cu121"
     else
         log_info "Installing CPU-only PyTorch..."
-        # Install specific compatible CPU versions
-        pip install torch==2.4.1 torchaudio==2.4.1 torchvision==0.19.1 --index-url "https://download.pytorch.org/whl/cpu"
+        pip install torch torchaudio --index-url "https://download.pytorch.org/whl/cpu"
     fi
 fi
 
@@ -244,12 +217,12 @@ else:
 
 log_success "PyTorch installation successful!"
 
-# Step 8: Install other Python dependencies
+# Step 8: Install Python dependencies (much simpler!)
 log_info "Installing Python dependencies..."
 
 # Check and install basic dependencies
 DEPS_TO_INSTALL=()
-for dep in "numpy" "soundfile" "librosa" "pyaudio" "pynput"; do
+for dep in "soundfile" "pyaudio" "pynput" "accelerate" "librosa"; do
     if ! python -c "import $dep" 2>/dev/null; then
         DEPS_TO_INSTALL+=("$dep")
     else
@@ -264,54 +237,26 @@ else
     log_success "All basic dependencies already installed"
 fi
 
-# Step 9: Install NeMo Toolkit
-NEMO_INSTALLED=false
-if python -c "import nemo.collections.speechlm; print('NeMo Toolkit available')" 2>/dev/null; then
-    log_success "NeMo Toolkit already installed and functional"
-    NEMO_INSTALLED=true
+# Step 9: Install CrisperWhisper transformers fork
+log_info "Installing CrisperWhisper transformers fork..."
+TRANSFORMERS_INSTALLED=false
+if python -c "from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline; print('CrisperWhisper transformers available')" 2>/dev/null; then
+    log_success "CrisperWhisper transformers already installed"
+    TRANSFORMERS_INSTALLED=true
 else
-    log_info "Installing NVIDIA NeMo Toolkit (this may take a while)..."
+    log_info "Installing CrisperWhisper transformers fork..."
 fi
 
-if [[ "$NEMO_INSTALLED" == false ]]; then
-    # Install NeMo with all required components for speech-language models
-    log_info "Installing NeMo with speech-language model support..."
+if [[ "$TRANSFORMERS_INSTALLED" == false ]]; then
+    log_info "Installing from GitHub fork..."
+    pip install "git+https://github.com/nyrahealth/transformers.git@crisper_whisper"
     
-    # Install nemo-run dependency first (required for NeMo 2.3.2+)
-    log_info "Installing nemo-run dependency..."
-    pip install nemo-run
-    
-    # Install specific compatible NeMo version
-    log_info "Installing NeMo Toolkit 2.3.2..."
-    if ! pip install "nemo_toolkit[all]==2.3.2"; then
-        log_warning "Specific version install failed, trying latest with all components..."
-        
-        # Try with current latest version
-        if ! pip install "nemo_toolkit[all]"; then
-            log_warning "Full NeMo install failed, trying git installation..."
-            
-            # Try installing from git
-            if ! pip install "git+https://github.com/NVIDIA/NeMo.git@main"; then
-                log_error "All NeMo installation methods failed!"
-                log_info "You may need to install NeMo manually:"
-                log_info "pip install 'nemo_toolkit[all]' or pip install 'git+https://github.com/NVIDIA/NeMo.git'"
-                exit 1
-            fi
-        fi
-    fi
-    
-    # Install additional dependencies
-    log_info "Installing additional NeMo dependencies..."
-    pip install transformers datasets sentencepiece
-    
-    # Verify the installation includes speechlm (not speechlm2 in newer versions)
-    log_info "Verifying NeMo speechlm module..."
-    if ! python -c "import nemo.collections.speechlm; print('✅ speechlm module available')" 2>/dev/null; then
-        log_error "speechlm module not available after installation"
-        log_info "This might be a version compatibility issue"
-        log_info "Try running: pip install 'git+https://github.com/NVIDIA/NeMo.git@main'"
+    # Verify installation
+    if python -c "from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline; print('✅ CrisperWhisper transformers working')" 2>/dev/null; then
+        log_success "CrisperWhisper transformers installation successful!"
     else
-        log_success "NeMo speechlm module loaded successfully"
+        log_error "CrisperWhisper transformers test failed!"
+        exit 1
     fi
 fi
 
@@ -346,8 +291,6 @@ python speech_hotkey.py
 EOF
 
 chmod +x run_speech_service.sh
-
-# Step 11: Verify required files exist
 
 # Step 11: Verify required files exist
 log_info "Verifying required Python scripts..."
@@ -419,14 +362,14 @@ def test_system_tools():
     
     return success
 
-def test_nemo():
-    """Test NeMo import"""
+def test_transformers():
+    """Test transformers import"""
     try:
-        import nemo.collections.speechlm
-        print("✅ NeMo Toolkit available")
+        from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
+        print("✅ Transformers available")
         return True
     except ImportError as e:
-        print(f"⚠️  NeMo import issue: {e}")
+        print(f"⚠️  Transformers import issue: {e}")
         return False
 
 if __name__ == "__main__":
@@ -436,7 +379,7 @@ if __name__ == "__main__":
     tests = [
         ("Python packages", test_imports),
         ("System tools", test_system_tools), 
-        ("NeMo Toolkit", test_nemo)
+        ("Transformers", test_transformers)
     ]
     
     results = []
@@ -463,7 +406,7 @@ log_info "Final setup..."
 
 # Create README
 cat > README.md << 'EOF'
-# Speech-to-Text with NVIDIA Canary
+# Speech-to-Text with CrisperWhisper
 
 ## Quick Start
 
@@ -493,6 +436,13 @@ cat > README.md << 'EOF'
 - Check GPU: `nvidia-smi`
 - Check audio: `pactl list sources short`
 
+## Why CrisperWhisper?
+
+- **Lightweight:** ~3.5GB total vs ~15GB+ for NVIDIA models
+- **Simple:** Uses standard transformers, no complex NeMo dependencies
+- **Accurate:** 6.67% WER performance
+- **Compatible:** Works on CPU or GPU
+
 EOF
 
 echo ""
@@ -504,7 +454,7 @@ echo "🎮 GPU support: $([[ $GPU_AVAILABLE == true ]] && echo "Yes ($GPU_NAME)"
 echo "🖥️  Display server: $DISPLAY_SERVER"
 echo ""
 echo "🚀 Ready to use! Start with:"
-echo "   cd $PROJECT_DIR && ./run_speech_service.sh"
+echo "   cd $PROJECT_DIR && ./run.sh"
 echo "📱 Hotkey: Super+P (Windows key + P)"
 echo ""
 
@@ -517,5 +467,5 @@ read -p "Start the speech-to-text service now? (Y/n): " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Nn]$ ]]; then
     log_info "Starting service..."
-    ./run_speech_service.sh
+    ./run.sh
 fi

@@ -1,0 +1,7 @@
+torch>=2.0.0
+git+https://github.com/nyrahealth/transformers.git@crisper_whisper
+accelerate>=0.20.0
+soundfile>=0.12.0
+pyaudio>=0.2.11
+pynput>=1.7.0
+librosa>=0.10.0
