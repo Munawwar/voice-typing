@@ -1,5 +1,5 @@
 [Unit]
-Description=Speech-to-Text Hotkey Service with Groq
+Description=Speech-to-Text Hotkey Service with Deepgram
 After=graphical-session.target
 Wants=graphical-session.target
 
@@ -11,8 +11,8 @@ Environment=DISPLAY=:0
 Environment=XDG_RUNTIME_DIR=/run/user/%i
 Environment=PULSE_RUNTIME_PATH=/run/user/%i/pulse
 Environment=XDG_SESSION_TYPE=%i
-# Set your Groq API key here (or use systemctl --user set-environment GROQ_API_KEY=your_key)
-Environment=GROQ_API_KEY=your_api_key_here
+# Set your Deepgram API key here (or use systemctl --user set-environment DEEPGRAM_API_KEY=your_key)
+Environment=DEEPGRAM_API_KEY=your_api_key_here
 WorkingDirectory=%h/speech-to-text
 ExecStartPre=/bin/bash -c 'while ! pgrep -x "pulseaudio|pipewire" > /dev/null; do sleep 1; done'
 ExecStart=%h/speech-to-text/venv/bin/python %h/speech-to-text/speech_hotkey.py

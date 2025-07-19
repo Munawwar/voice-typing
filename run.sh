@@ -17,13 +17,13 @@ if [ ! -d "venv" ]; then
 fi
 
 # Check for API key
-if [ -z "$GROQ_API_KEY" ]; then
-    echo -e "${RED}❌ GROQ_API_KEY environment variable not set!${NC}"
+if [ -z "$DEEPGRAM_API_KEY" ]; then
+    echo -e "${RED}❌ DEEPGRAM_API_KEY environment variable not set!${NC}"
     echo -e "${YELLOW}Set your API key first:${NC}"
-    echo "export GROQ_API_KEY='your_api_key_here'"
+    echo "export DEEPGRAM_API_KEY='your_api_key_here'"
     echo ""
     echo -e "${YELLOW}Or add it to your ~/.bashrc or ~/.zshrc:${NC}"
-    echo "echo 'export GROQ_API_KEY=\"your_api_key_here\"' >> ~/.bashrc"
+    echo "echo 'export DEEPGRAM_API_KEY=\"your_api_key_here\"' >> ~/.bashrc"
     exit 1
 fi
 
@@ -35,7 +35,7 @@ export DISPLAY=${DISPLAY:-:0}
 
 # Run the hotkey service
 echo -e "${GREEN}🎤 Starting Speech-to-Text Hotkey Service...${NC}"
-echo -e "${GREEN}📱 Press Super+Space to start recording, press again to stop and transcribe${NC}"
+echo -e "${GREEN}📱 Press Super+Space to start streaming, press again to stop and transcribe${NC}"
 echo -e "${YELLOW}🛑 Press Ctrl+C to quit${NC}"
 echo ""
 

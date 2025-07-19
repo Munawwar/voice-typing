@@ -1,191 +1,336 @@
 #!/usr/bin/env python3
 """
-Groq Whisper Large v3 Turbo Speech-to-Text
+Deepgram Streaming Speech-to-Text
 Supports both X11 and Wayland with automatic detection
+Real-time streaming transcription with keyword detection
 """
 
 import argparse
-import soundfile as sf
 import tempfile
 import subprocess
 import threading
 import time
-import pyaudio
-import wave
 import os
 import sys
+import asyncio
 from pathlib import Path
-from groq import Groq
+from dotenv import load_dotenv
+from deepgram import (
+    DeepgramClient,
+    LiveTranscriptionEvents,
+    LiveOptions,
+    Microphone
+)
+
+load_dotenv()
 
 class SpeechToTextService:
     def __init__(self):
-        print("🔄 Initializing Groq Whisper Large v3 Turbo...")
+        print("🔄 Initializing Deepgram Streaming Speech-to-Text...")
         
         # Get API key from environment
-        api_key = os.getenv('GROQ_API_KEY')
+        api_key = os.getenv('DEEPGRAM_API_KEY')
         if not api_key:
-            print("❌ GROQ_API_KEY environment variable not set!")
-            print("Please set your Groq API key:")
-            print("export GROQ_API_KEY='your_api_key_here'")
+            print("❌ DEEPGRAM_API_KEY environment variable not set!")
+            print("Please set your Deepgram API key:")
+            print("export DEEPGRAM_API_KEY='your_api_key_here'")
             sys.exit(1)
         
         try:
-            self.client = Groq(api_key=api_key)
-            print("✅ Groq client initialized successfully")
+            self.deepgram = DeepgramClient(api_key)
+            print("✅ Deepgram client initialized successfully")
         except Exception as e:
-            print(f"❌ Error initializing Groq client: {e}")
+            print(f"❌ Error initializing Deepgram client: {e}")
             sys.exit(1)
         
-        # Audio settings
-        self.chunk = 1024
-        self.format = pyaudio.paInt16
-        self.channels = 1
-        self.preferred_rate = 16000  # Whisper models prefer 16kHz
+        # Streaming state
         self.recording = False
+        self.transcription_parts = []
+        self.current_text = ""
+        self.microphone = None
+        self.dg_connection = None
+        self.real_time_typing = False  # Flag to control real-time typing
+        self.stop_requested = False  # Flag to stop recording via voice command
         
-    def find_input_device(self, audio):
-        """Find the best input device"""
-        print("🔍 Looking for microphone...")
+        # Keywords for special commands
+        self.delete_keywords = ["undo that"]
+        self.newline_keywords = ["newline", "new line"]
+        self.paragraph_keywords = ["next para", "new para", "next paragraph", "new paragraph"]
+        self.stop_keywords = ["end voice", "end recording", "stop recording", "stop voice"]
+        self.escape_keywords = ["literal", "literally"]
         
-        # Get device count
-        device_count = audio.get_device_count()
-        input_devices = []
+    def setup_live_transcription(self):
+        """Setup live transcription connection"""
+        try:
+            # Create connection
+            self.dg_connection = self.deepgram.listen.websocket.v("1")
+            
+            # Define event handlers (using service_self to avoid conflict)
+            service_self = self
+            
+            def on_open(dg_self, open, **kwargs):
+                print("🔗 Connection opened")
+
+            def on_message(dg_self, result, **kwargs):
+                sentence = result.channel.alternatives[0].transcript
+                if sentence:
+                    if result.is_final:
+                        print(f"📝 Final: {sentence}")
+                        
+                        # Check for voice commands BEFORE adding to transcription_parts
+                        processed_sentence = service_self.process_voice_commands(sentence)
+                        if processed_sentence is not None:
+                            # Only add to transcription_parts if it's not a command
+                            service_self.transcription_parts.append(processed_sentence)
+                            service_self.current_text += " " + processed_sentence
+                            # Type the final sentence immediately for real-time feedback
+                            if hasattr(service_self, 'real_time_typing') and service_self.real_time_typing:
+                                service_self.type_text(" " + processed_sentence)
+                    else:
+                        print(f"💭 Interim: {sentence}")
+
+            def on_metadata(dg_self, metadata, **kwargs):
+                print(f"🔍 Metadata: {metadata}")
+
+            def on_speech_started(dg_self, speech_started, **kwargs):
+                print("🎤 Speech started")
+
+            def on_utterance_end(dg_self, utterance_end, **kwargs):
+                print("⏹️ Utterance ended")
+
+            def on_close(dg_self, close, **kwargs):
+                print("🔚 Connection closed")
+
+            def on_error(dg_self, error, **kwargs):
+                print(f"❌ Error: {error}")
+
+            # Register event handlers
+            self.dg_connection.on(LiveTranscriptionEvents.Open, on_open)
+            self.dg_connection.on(LiveTranscriptionEvents.Transcript, on_message)
+            self.dg_connection.on(LiveTranscriptionEvents.Metadata, on_metadata)
+            self.dg_connection.on(LiveTranscriptionEvents.SpeechStarted, on_speech_started)
+            self.dg_connection.on(LiveTranscriptionEvents.UtteranceEnd, on_utterance_end)
+            self.dg_connection.on(LiveTranscriptionEvents.Close, on_close)
+            self.dg_connection.on(LiveTranscriptionEvents.Error, on_error)
+
+            # Configure live transcription options (using only supported parameters)
+            options = LiveOptions(
+                model="nova-3",
+                language="en-IN",
+                # improves readability
+                smart_format=True,
+                punctuate=True,
+                encoding="linear16",
+                channels=1,
+                sample_rate=16000,
+                interim_results=True,
+                utterance_end_ms="1000",
+                vad_events=True,
+                endpointing=300,
+                profanity_filter=True,
+                # Remove words like "um" and "uh"
+                filler_words=True,
+                keyterm=["UNDO", "THAT", "NEWLINE", "NEW", "LINE", "PARA", "PARAGRAPH", "LITERAL", "LITERALLY", "END", "VOICE", "RECORDING", "STOP"],
+                # Convert numeric words to numbers
+                numerals=True,
+                tag="voice-typing"
+            )
+
+            # Start connection
+            if self.dg_connection.start(options) is False:
+                print("❌ Failed to start connection")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error setting up live transcription: {e}")
+            return False
+
+    def process_voice_commands(self, sentence):
+        """Process voice commands and return modified sentence or None if command executed"""
+        sentence_lower = sentence.lower().strip()
         
-        for i in range(device_count):
+        # Check for escape keywords - if present, treat as literal text
+        if any(escape in sentence_lower for escape in self.escape_keywords):
+            print(f"🔤 Literal text detected: {sentence}")
+            # Remove the escape word and return the rest as literal text
+            for escape in self.escape_keywords:
+                sentence = sentence.replace(escape, "").replace(escape.capitalize(), "").strip()
+            return sentence
+        
+        # Check for delete command
+        if any(keyword in sentence_lower for keyword in self.delete_keywords):
+            self.handle_delete_command()
+            return None  # Don't add this sentence to text
+        
+        # Check for newline command
+        if any(keyword in sentence_lower for keyword in self.newline_keywords):
+            self.handle_newline_command()
+            return None  # Don't add this sentence to text
+        
+        # Check for paragraph command
+        if any(keyword in sentence_lower for keyword in self.paragraph_keywords):
+            self.handle_paragraph_command()
+            return None  # Don't add this sentence to text
+        
+        # Check for stop recording command
+        if any(keyword in sentence_lower for keyword in self.stop_keywords):
+            self.handle_stop_command()
+            return None  # Don't add this sentence to text
+        
+        # No command detected, return sentence as-is
+        return sentence
+    
+    def handle_delete_command(self):
+        """Handle delete commands to remove words"""
+        print(f"🗑️ Delete command detected")
+        
+        # Simple implementation: remove the last sentence/word
+        if self.transcription_parts:
+            removed = self.transcription_parts.pop()
+            print(f"🗑️ Removed: {removed}")
+            # Rebuild current text
+            self.current_text = " ".join(self.transcription_parts)
+            # Type backspaces to visually remove the text
+            if self.real_time_typing:
+                self.type_backspaces(len(removed) + 1)  # +1 for the space
+    
+    def handle_newline_command(self):
+        """Handle newline command to add a single line break"""
+        print(f"📝 Newline command detected")
+        if self.real_time_typing:
+            self.type_newline()
+    
+    def handle_paragraph_command(self):
+        """Handle paragraph command to add double line break"""
+        print(f"📝 Paragraph command detected")
+        if self.real_time_typing:
+            self.type_paragraph_break()
+    
+    def handle_stop_command(self):
+        """Handle stop recording command"""
+        print(f"🛑 Stop command detected - ending recording")
+        # Set a flag that can be checked by the streaming loop
+        self.stop_requested = True
+    
+    def type_newline(self):
+        """Type a single newline (Shift+Enter)"""
+        self.type_key_combination(['shift', 'Return'])
+    
+    def type_paragraph_break(self):
+        """Type double newline for paragraph break"""
+        self.type_key_combination(['shift', 'Return'])
+        self.type_key_combination(['shift', 'Return'])
+    
+    def type_backspaces(self, count):
+        """Type multiple backspace characters"""
+        for _ in range(count):
+            self.type_key_combination(['BackSpace'])
+    
+    def type_key_combination(self, keys):
+        """Type a key combination using available tools"""
+        display_server = os.environ.get('XDG_SESSION_TYPE', 'x11')
+        
+        # Convert keys to appropriate format for each tool
+        key_string = '+'.join(keys)
+        
+        if display_server == 'wayland':
+            methods = [
+                ('ydotool', lambda: subprocess.run(['ydotool', 'key'] + [f'{k.lower()}:{1 if k != "shift" else 1}' for k in keys], check=True, capture_output=True)),
+                ('wtype', lambda: self._wtype_key_combo(keys)),
+            ]
+        else:
+            methods = [
+                ('xdotool', lambda: subprocess.run(['xdotool', 'key', key_string], check=True, capture_output=True)),
+            ]
+        
+        # Try each method until one works
+        for method_name, method_func in methods:
             try:
-                device_info = audio.get_device_info_by_index(i)
-                if device_info['maxInputChannels'] > 0:
-                    input_devices.append((i, device_info))
-                    print(f"  📱 Device {i}: {device_info['name']} ({device_info['maxInputChannels']} channels)")
-            except:
+                method_func()
+                print(f"✅ Typed key combo via {method_name}: {key_string}")
+                return
+            except (subprocess.CalledProcessError, FileNotFoundError):
                 continue
         
-        if not input_devices:
-            print("❌ No input devices found")
-            return None
-        
-        # Prefer USB/headset devices, then default
-        for device_id, device_info in input_devices:
-            name = device_info['name'].lower()
-            if 'usb' in name or 'headset' in name or 'jabra' in name or 'evolve' in name:
-                print(f"✅ Selected: {device_info['name']}")
-                return device_id, device_info
-        
-        # Try the default device
-        try:
-            default_device = audio.get_default_input_device_info()
-            print(f"✅ Using default: {default_device['name']}")
-            return default_device['index'], default_device
-        except:
-            # Use first available device
-            device_id, device_info = input_devices[0]
-            print(f"✅ Using first available: {device_info['name']}")
-            return device_id, device_info
-
-    def record_audio(self, duration=None):
-        """Record audio from microphone"""
-        try:
-            audio = pyaudio.PyAudio()
-        except Exception as e:
-            print(f"❌ Error initializing audio: {e}")
-            print("Make sure pulseaudio/pipewire is running and microphone is available")
-            return None
-        
-        # Find the best input device
-        device_result = self.find_input_device(audio)
-        if device_result is None:
-            audio.terminate()
-            return None
-        
-        device_id, device_info = device_result
-        
-        # Use device's native sample rate
-        device_rate = int(device_info['defaultSampleRate'])
-        if device_rate != self.preferred_rate:
-            print(f"ℹ️  Device supports {device_rate}Hz, will resample to {self.preferred_rate}Hz")
-        
-        try:
-            stream = audio.open(
-                format=self.format,
-                channels=self.channels,
-                rate=device_rate,
-                input=True,
-                input_device_index=device_id,
-                frames_per_buffer=self.chunk
-            )
-            
-            self.actual_rate = device_rate
-            
-        except Exception as e:
-            print(f"❌ Error opening audio stream: {e}")
-            print("Check microphone permissions and availability")
-            audio.terminate()
-            return None
-        
-        if duration is None:
-            print("🎤 Recording... (Press Ctrl+C to stop)")
+        print(f"❌ Failed to type key combination: {key_string}")
+    
+    def _wtype_key_combo(self, keys):
+        """Handle key combinations for wtype (limited support)"""
+        if keys == ['shift', 'Return']:
+            # wtype doesn't support shift+enter, so just send enter
+            subprocess.run(['wtype', '\n'], check=True)
+        elif keys == ['BackSpace']:
+            subprocess.run(['wtype', '\b'], check=True)
         else:
-            print(f"🎤 Recording for {duration} seconds...")
+            raise subprocess.CalledProcessError(1, 'wtype')
         
-        frames = []
-        start_time = time.time()
-        
+    async def start_streaming(self, duration=None, real_time_typing=False):
+        """Start streaming transcription"""
         try:
-            while self.recording or (duration and time.time() - start_time < duration):
-                data = stream.read(self.chunk, exception_on_overflow=False)
-                frames.append(data)
-                
-                if duration and time.time() - start_time >= duration:
-                    break
-                    
-        except KeyboardInterrupt:
-            print("\n⏹️  Stopping recording...")
-        except Exception as e:
-            print(f"❌ Error during recording: {e}")
-        
-        stream.stop_stream()
-        stream.close()
-        audio.terminate()
-        
-        if not frames:
-            print("❌ No audio recorded")
-            return None
-        
-        # Save to temporary file
-        temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-        try:
-            with wave.open(temp_file.name, 'wb') as wf:
-                wf.setnchannels(self.channels)
-                wf.setsampwidth(pyaudio.get_sample_size(self.format))
-                wf.setframerate(self.actual_rate)
-                wf.writeframes(b''.join(frames))
+            # Set real-time typing flag and reset stop flag
+            self.real_time_typing = real_time_typing
+            self.stop_requested = False
             
-            return temp_file.name
+            # Setup live transcription
+            if not self.setup_live_transcription():
+                return None
+            
+            # Setup microphone
+            self.microphone = Microphone(self.dg_connection.send)
+            
+            # Start microphone
+            print("🎤 Starting microphone...")
+            self.microphone.start()
+            
+            if duration:
+                print(f"🎤 Streaming for {duration} seconds...")
+                await asyncio.sleep(duration)
+            else:
+                print("🎤 Streaming... (Press Ctrl+C or say 'end voice' to stop)")
+                try:
+                    while not self.stop_requested:
+                        await asyncio.sleep(0.1)
+                    print("\n⏹️ Stopping streaming via voice command...")
+                except KeyboardInterrupt:
+                    print("\n⏹️ Stopping streaming...")
+            
+            # Stop microphone and connection
+            self.microphone.finish()
+            self.dg_connection.finish()
+            
+            # Return the final transcription
+            final_text = self.current_text.strip()
+            return final_text if final_text else None
+            
         except Exception as e:
-            print(f"❌ Error saving audio: {e}")
+            print(f"❌ Error during streaming: {e}")
             return None
     
     def transcribe_audio(self, audio_file):
-        """Transcribe audio using Groq Whisper Large v3 Turbo"""
+        """Transcribe audio file using Deepgram (fallback for file-based transcription)"""
         if not audio_file or not os.path.exists(audio_file):
             print("❌ Invalid audio file")
             return ""
         
         try:
-            print("🔄 Transcribing audio with Groq Whisper Large v3 Turbo...")
+            print("🔄 Transcribing audio file with Deepgram...")
             
-            # Open and transcribe the audio file
             with open(audio_file, "rb") as file:
-                transcription = self.client.audio.transcriptions.create(
-                    file=file,
-                    model="whisper-large-v3-turbo",
-                    response_format="json",
-                    temperature=0.0  # Deterministic output
-                )
+                buffer_data = file.read()
+
+            response = self.deepgram.listen.prerecorded.v("1").transcribe_file(
+                { "buffer": buffer_data },
+                {
+                    "model": "nova-3",
+                    "smart_format": True,
+                }
+            )
             
             # Extract text from response
-            if hasattr(transcription, 'text'):
-                text = transcription.text.strip()
+            if response.results and response.results.channels:
+                text = response.results.channels[0].alternatives[0].transcript.strip()
                 print(f"✅ Transcription completed: {len(text)} characters")
                 return text
             else:
@@ -333,58 +478,54 @@ class SpeechToTextService:
             print("\nFallback (Wayland compatibility):")
             print("  sudo apt install wtype ydotool wl-clipboard")
     
-    def start_continuous_mode(self, copy_to_clipboard=False, no_type=False):
-        """Start continuous speech recognition"""
-        print("🎤 Starting continuous mode...")
-        print("Press Enter to start recording, then Enter again to stop and transcribe")
+    async def start_continuous_mode(self, copy_to_clipboard=False, no_type=False):
+        """Start continuous streaming speech recognition"""
+        print("🎤 Starting continuous streaming mode...")
+        print("Press Enter to start streaming, then Enter again to stop and process")
         print("Type 'q' and Enter to quit")
+        print("Say 'delete' to remove the last transcribed segment")
         
         while True:
-            user_input = input("\nPress Enter to record (or 'q' to quit): ").strip().lower()
+            user_input = input("\nPress Enter to stream (or 'q' to quit): ").strip().lower()
             if user_input == 'q':
                 break
             
-            # Start recording
-            self.recording = True
-            print("🎤 Recording... Press Enter to stop")
+            # Reset transcription state
+            self.transcription_parts = []
+            self.current_text = ""
             
-            # Start recording in background
-            record_thread = threading.Thread(target=self._background_record)
-            record_thread.start()
+            print("🎤 Streaming... Press Enter to stop")
             
-            # Wait for user to stop
-            input()  # Wait for Enter
-            self.recording = False
-            record_thread.join()
+            # Start streaming in background
+            stream_task = asyncio.create_task(self.start_streaming())
             
-            if hasattr(self, '_last_audio_file') and self._last_audio_file:
-                transcription = self.transcribe_audio(self._last_audio_file)
-                if transcription:
-                    print(f"📝 Transcribed: {transcription}")
-                    if copy_to_clipboard:
-                        self.copy_to_clipboard(transcription)
-                    if not no_type:
-                        self.type_text(transcription)
-                else:
-                    print("❌ No speech detected")
+            # Wait for user to stop (in a separate thread to not block async)
+            def wait_for_input():
+                input()
                 
-                # Clean up
-                try:
-                    os.unlink(self._last_audio_file)
-                except:
-                    pass
-    
-    def _background_record(self):
-        """Background recording for continuous mode"""
-        self._last_audio_file = self.record_audio()
+            await asyncio.get_event_loop().run_in_executor(None, wait_for_input)
+            
+            # Cancel streaming
+            stream_task.cancel()
+            
+            # Process final transcription
+            if self.current_text:
+                transcription = self.current_text.strip()
+                print(f"📝 Final transcription: {transcription}")
+                if copy_to_clipboard:
+                    self.copy_to_clipboard(transcription)
+                if not no_type:
+                    self.type_text(transcription)
+            else:
+                print("❌ No speech detected")
 
-def main():
-    parser = argparse.ArgumentParser(description='Groq Whisper Large v3 Turbo Speech-to-Text')
+async def main():
+    parser = argparse.ArgumentParser(description='Deepgram Streaming Speech-to-Text')
     parser.add_argument('--file', '-f', help='Transcribe audio file')
     parser.add_argument('--continuous', '-c', action='store_true', 
-                       help='Start continuous speech recognition')
+                       help='Start continuous streaming speech recognition')
     parser.add_argument('--duration', '-d', type=int, default=5,
-                       help='Recording duration in seconds (default: 5)')
+                       help='Streaming duration in seconds (default: 5)')
     parser.add_argument('--no-type', action='store_true',
                        help='Don\'t type the result, just print it')
     parser.add_argument('--copy-to-clipboard', action='store_true',
@@ -416,9 +557,9 @@ def main():
             print("❌ Transcription failed")
         
     elif args.continuous:
-        # Start continuous mode
+        # Start continuous streaming mode
         try:
-            stt_service.start_continuous_mode(
+            await stt_service.start_continuous_mode(
                 copy_to_clipboard=args.copy_to_clipboard,
                 no_type=args.no_type
             )
@@ -426,32 +567,20 @@ def main():
             print("\n👋 Goodbye!")
         
     else:
-        # Single recording
-        print(f"🎤 Recording for {args.duration} seconds...")
+        # Single streaming session
+        print(f"🎤 Streaming for {args.duration} seconds...")
         time.sleep(1)  # Give user time to prepare
         
-        stt_service.recording = True
-        audio_file = stt_service.record_audio(duration=args.duration)
-        stt_service.recording = False
+        transcription = await stt_service.start_streaming(duration=args.duration, real_time_typing=not args.no_type)
         
-        if audio_file:
-            transcription = stt_service.transcribe_audio(audio_file)
-            if transcription:
-                print(f"📝 Transcription: {transcription}")
-                if args.copy_to_clipboard:
-                    stt_service.copy_to_clipboard(transcription)
-                if not args.no_type:
-                    stt_service.type_text(transcription)
-            else:
-                print("❌ No speech detected")
-            
-            # Clean up
-            try:
-                os.unlink(audio_file)
-            except:
-                pass
+        if transcription:
+            print(f"📝 Transcription: {transcription}")
+            if args.copy_to_clipboard:
+                stt_service.copy_to_clipboard(transcription)
+            if not args.no_type:
+                stt_service.type_text(transcription)
         else:
-            print("❌ Recording failed")
+            print("❌ No speech detected")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

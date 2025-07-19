@@ -23,8 +23,8 @@ if [[ $EUID -eq 0 ]]; then
    exit 1
 fi
 
-echo "🎤 Groq Whisper Large v3 Turbo Speech-to-Text Installer"
-echo "========================================================"
+echo "🎤 Deepgram Streaming Speech-to-Text Installer"
+echo "=============================================="
 
 # Step 1: Check Python version
 log_info "Checking Python version..."
@@ -52,14 +52,14 @@ if [[ -z "$PYTHON_CMD" ]]; then
     exit 1
 fi
 
-# Step 2: Check for GROQ_API_KEY environment variable
-log_info "Checking for Groq API key..."
-if [[ -z "$GROQ_API_KEY" ]]; then
-    log_warning "GROQ_API_KEY environment variable not set"
+# Step 2: Check for DEEPGRAM_API_KEY environment variable
+log_info "Checking for Deepgram API key..."
+if [[ -z "$DEEPGRAM_API_KEY" ]]; then
+    log_warning "DEEPGRAM_API_KEY environment variable not set"
     log_info "You'll need to set this before running the service:"
-    log_info "export GROQ_API_KEY='your_api_key_here'"
+    log_info "export DEEPGRAM_API_KEY='your_api_key_here'"
 else
-    log_success "GROQ_API_KEY environment variable is set"
+    log_success "DEEPGRAM_API_KEY environment variable is set"
 fi
 
 # Step 3: Install system dependencies
@@ -71,8 +71,6 @@ sudo apt update
 # Install essential packages
 PACKAGES=(
     "build-essential"
-    "portaudio19-dev"
-    "pulseaudio-utils"
     "libnotify-bin"
     "python3-venv"
     "python3-dev"
@@ -181,14 +179,14 @@ else
     exit 1
 fi
 
-# Step 7: Test Groq package installation
-log_info "Testing Groq package installation..."
+# Step 7: Test Deepgram package installation
+log_info "Testing Deepgram package installation..."
 python -c "
-import groq
-print(f'Groq package version: {groq.__version__}')
-print('✅ Groq package installed successfully')
+import deepgram
+print(f'Deepgram package version: {deepgram.__version__}')
+print('✅ Deepgram package installed successfully')
 " || {
-    log_error "Groq package test failed!"
+    log_error "Deepgram package test failed!"
     exit 1
 }
 
@@ -231,15 +229,15 @@ import subprocess
 def test_imports():
     """Test all required imports"""
     try:
-        import groq
-        import soundfile
-        import pyaudio  
+        import deepgram
         import pynput
         import tempfile
         import subprocess
+        import asyncio
+        from dotenv import load_dotenv
         
         print("✅ All Python packages imported successfully")
-        print(f"✅ Groq package version: {groq.__version__}")
+        print(f"✅ Deepgram package version: {deepgram.__version__}")
         
         return True
     except ImportError as e:
@@ -269,15 +267,15 @@ def test_system_tools():
     
     return success
 
-def test_groq_api_key():
-    """Test GROQ_API_KEY environment variable"""
-    api_key = os.environ.get('GROQ_API_KEY')
+def test_deepgram_api_key():
+    """Test DEEPGRAM_API_KEY environment variable"""
+    api_key = os.environ.get('DEEPGRAM_API_KEY')
     if api_key:
-        print("✅ GROQ_API_KEY environment variable is set")
+        print("✅ DEEPGRAM_API_KEY environment variable is set")
         return True
     else:
-        print("⚠️  GROQ_API_KEY environment variable not set")
-        print("   Set it with: export GROQ_API_KEY='your_api_key_here'")
+        print("⚠️  DEEPGRAM_API_KEY environment variable not set")
+        print("   Set it with: export DEEPGRAM_API_KEY='your_api_key_here'")
         return False
 
 if __name__ == "__main__":
@@ -287,7 +285,7 @@ if __name__ == "__main__":
     tests = [
         ("Python packages", test_imports),
         ("System tools", test_system_tools), 
-        ("Groq API key", test_groq_api_key)
+        ("Deepgram API key", test_deepgram_api_key)
     ]
     
     results = []
@@ -302,8 +300,8 @@ if __name__ == "__main__":
         print("1. Run: ./run.sh")
     else:
         print("⚠️  Some tests failed. Check the output above.")
-        if not os.environ.get('GROQ_API_KEY'):
-            print("💡 Don't forget to set your GROQ_API_KEY!")
+        if not os.environ.get('DEEPGRAM_API_KEY'):
+            print("💡 Don't forget to set your DEEPGRAM_API_KEY!")
         sys.exit(1)
 EOF
 
@@ -313,15 +311,20 @@ python test_installation.py
 # Final setup
 log_info "Final setup..."
 
-# Create README
+# Don't overwrite existing README.md as it was already updated
+if [ ! -f "README.md" ]; then
 cat > README.md << 'EOF'
-# Speech-to-Text with Groq Whisper Large v3 Turbo
+# Speech-to-Text with Deepgram Streaming API
+
+Real-time voice transcription into any text field in Ubuntu via hotkey (Super + Space)
+
+Features keyword detection (say "delete" to remove last transcription segment)
 
 ## Quick Start
 
 1. **Set your API key:**
    ```bash
-   export GROQ_API_KEY='your_api_key_here'
+   export DEEPGRAM_API_KEY='your_api_key_here'
    ```
 
 2. **Start the service:**
@@ -329,18 +332,18 @@ cat > README.md << 'EOF'
    ./run.sh
    ```
 
-3. **Use hotkey:** Press `Super+Space` to start recording, press again to stop and transcribe
+3. **Use hotkey:** Press `Super+Space` to start streaming, press again to stop and type
    - Text is automatically copied to clipboard and typed to the active window
 
-4. **Single recording:**
+4. **Single streaming session:**
    ```bash
    source venv/bin/activate
-   python speech_to_text.py -d 5  # Record for 5 seconds
+   python speech_to_text.py -d 5  # Stream for 5 seconds
    ```
 
-5. **Copy to clipboard:**
+5. **Continuous streaming mode:**
    ```bash
-   python speech_to_text.py --copy-to-clipboard -d 5  # Copy transcription to clipboard
+   python speech_to_text.py -c  # Interactive streaming
    ```
 
 ## Files
@@ -353,29 +356,30 @@ cat > README.md << 'EOF'
 ## Troubleshooting
 
 - Test installation: `python test_installation.py`
-- Check API key: `echo $GROQ_API_KEY`
+- Check API key: `echo $DEEPGRAM_API_KEY`
 - Check audio: `pactl list sources short`
 
-## Why Groq Whisper Large v3 Turbo?
+## Why Deepgram Streaming API?
 
-- **Ultra-fast:** 216x real-time transcription speed
-- **High accuracy:** OpenAI's best speech recognition model
-- **Cloud-based:** No local model download required
-- **Cost-effective:** $0.04 per hour of audio
-- **Simple:** No GPU or complex dependencies needed
+- **Real-time:** Live streaming transcription with instant results
+- **Keywords:** Built-in support for detecting special commands like "delete"
+- **High accuracy:** Nova-2 model with smart formatting
+- **Low latency:** WebSocket-based streaming for minimal delay
+- **Flexible:** Supports both streaming and file-based transcription
 
 EOF
+fi
 
 echo ""
 log_success "Installation completed successfully!"
 echo ""
 echo "📁 Project directory: $PROJECT_DIR"
 echo "🐍 Python version: $($PYTHON_CMD --version)"
-echo "🌐 API: Groq Whisper Large v3 Turbo"
+echo "🌐 API: Deepgram Streaming API"
 echo "🖥️  Display server: $DISPLAY_SERVER"
 echo ""
 echo "🚀 Ready to use! Start with:"
-echo "   export GROQ_API_KEY='your_api_key_here'"
+echo "   export DEEPGRAM_API_KEY='your_api_key_here'"
 echo "   cd $PROJECT_DIR && ./run.sh"
 echo "📱 Hotkey: Super+Space (Windows key + Space)"
 echo ""
@@ -385,7 +389,7 @@ if [[ "$DISPLAY_SERVER" == "wayland" ]] && ! groups "$USER" | grep -q input; the
 fi
 
 # Offer to start immediately
-if [[ -n "$GROQ_API_KEY" ]]; then
+if [[ -n "$DEEPGRAM_API_KEY" ]]; then
     read -p "Start the speech-to-text service now? (Y/n): " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Nn]$ ]]; then
@@ -393,5 +397,5 @@ if [[ -n "$GROQ_API_KEY" ]]; then
         ./run.sh
     fi
 else
-    log_warning "Set GROQ_API_KEY first, then run ./run.sh"
+    log_warning "Set DEEPGRAM_API_KEY first, then run ./run.sh"
 fi

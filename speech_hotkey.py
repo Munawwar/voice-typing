@@ -11,6 +11,7 @@ import tempfile
 import os
 import sys
 import signal
+import asyncio
 from pathlib import Path
 
 # Import the speech service
@@ -27,7 +28,9 @@ class HotkeyService:
         
         self.recording = False
         self.current_keys = set()
-        self.audio_file = None
+        self.streaming_task = None
+        self.loop = None
+        self.initializing = False  # Flag to prevent race conditions
         
         # Setup signal handlers for clean shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -36,11 +39,8 @@ class HotkeyService:
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
         print("\n🛑 Shutting down...")
-        if self.audio_file and os.path.exists(self.audio_file):
-            try:
-                os.unlink(self.audio_file)
-            except:
-                pass
+        if self.streaming_task:
+            self.streaming_task.cancel()
         sys.exit(0)
         
     def on_press(self, key):
@@ -86,164 +86,112 @@ class HotkeyService:
             self.start_recording()
     
     def start_recording(self):
-        """Start recording audio"""
-        if self.recording:
+        """Start streaming audio"""
+        if self.recording or self.initializing:
+            print("⚠️ Already recording or initializing, ignoring hotkey")
             return
             
+        self.initializing = True
         self.recording = True
-        print("🎤 Recording started...")
+        print("🎤 Streaming started...")
         
         # Show desktop notification
         try:
             subprocess.run([
                 'notify-send', 
                 'Speech Recognition', 
-                'Recording started... Press Super+Space again to stop and transcribe',
+                'Streaming started... Press Super+Space again to stop and transcribe',
                 '--icon=audio-input-microphone',
                 '--expire-time=2000'
             ], capture_output=True)
         except:
             pass
         
-        # Start recording in a separate thread
-        self.record_thread = threading.Thread(target=self._record_audio)
+        # Reset transcription state
+        self.stt_service.transcription_parts = []
+        self.stt_service.current_text = ""
+        
+        # Start streaming in a separate thread
+        self.record_thread = threading.Thread(target=self._start_streaming)
         self.record_thread.daemon = True
         self.record_thread.start()
     
     def stop_recording(self):
-        """Stop recording and transcribe"""
+        """Stop streaming and transcribe"""
         if not self.recording:
             return
             
         self.recording = False
-        print("🛑 Recording stopped, processing...")
+        self.initializing = False  # Clear both flags
+        print("🛑 Streaming stopped, processing...")
+        
+        # Cancel streaming task
+        if self.streaming_task:
+            self.streaming_task.cancel()
         
         # Show processing notification
         try:
             subprocess.run([
                 'notify-send', 
                 'Speech Recognition', 
-                'Processing audio...',
+                'Processing transcription...',
                 '--icon=view-refresh',
                 '--expire-time=3000'
             ], capture_output=True)
         except:
             pass
+        
+        # Process the final transcription
+        self._process_final_transcription()
     
-    def _record_audio(self):
-        """Record audio in background thread"""
-        import pyaudio
-        import wave
-        
-        # Audio settings (16kHz mono as required by model)
-        chunk = 1024
-        format = pyaudio.paInt16
-        channels = 1
-        rate = 16000
-        
+    def _start_streaming(self):
+        """Start streaming in background thread"""
         try:
-            audio = pyaudio.PyAudio()
+            # Create new event loop for this thread
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
             
-            # Find best input device (same logic as main service)
-            device_result = self.stt_service.find_input_device(audio)
-            if device_result is None:
-                audio.terminate()
-                self.recording = False
-                return
+            # Clear initializing flag once we start the actual streaming
+            self.initializing = False
             
-            device_id, device_info = device_result
-            device_rate = int(device_info['defaultSampleRate'])
+            # Start streaming with real-time typing enabled
+            self.streaming_task = self.loop.create_task(self.stt_service.start_streaming(real_time_typing=True))
+            self.loop.run_until_complete(self.streaming_task)
             
-            stream = audio.open(
-                format=format,
-                channels=channels,
-                rate=device_rate,  # Use device's native rate
-                input=True,
-                input_device_index=device_id,
-                frames_per_buffer=chunk
-            )
+        except asyncio.CancelledError:
+            print("🛑 Streaming cancelled")
         except Exception as e:
-            print(f"❌ Audio initialization failed: {e}")
-            self.recording = False
-            return
-        
-        frames = []
-        
-        # Record while self.recording is True
-        try:
-            while self.recording:
-                data = stream.read(chunk, exception_on_overflow=False)
-                frames.append(data)
-        except Exception as e:
-            print(f"❌ Recording error: {e}")
+            print(f"❌ Streaming error: {e}")
+            self._show_error_notification(f"Streaming failed: {str(e)[:50]}")
         finally:
-            stream.stop_stream()
-            stream.close()
-            audio.terminate()
-        
-        # Save and transcribe if we have audio
-        if frames and len(frames) > 10:  # At least some audio
-            try:
-                # Save to temporary file
-                temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-                self.audio_file = temp_file.name
-                
-                with wave.open(temp_file.name, 'wb') as wf:
-                    wf.setnchannels(channels)
-                    wf.setsampwidth(audio.get_sample_size(format))
-                    wf.setframerate(device_rate)  # Use actual recording rate
-                    wf.writeframes(b''.join(frames))
-                
-                # Transcribe in separate thread to avoid blocking
-                transcribe_thread = threading.Thread(target=self._process_transcription)
-                transcribe_thread.daemon = True
-                transcribe_thread.start()
-                
-            except Exception as e:
-                print(f"❌ Error saving audio: {e}")
-                self._show_error_notification("Failed to save audio")
-        else:
-            print("⚠️ No audio recorded")
-            self._show_error_notification("No audio detected")
+            self.initializing = False
+            if self.loop:
+                self.loop.close()
     
-    def _process_transcription(self):
-        """Process transcription in background"""
-        if not self.audio_file or not os.path.exists(self.audio_file):
-            return
-        
+    def _process_final_transcription(self):
+        """Process final transcription from streaming"""
         try:
-            # Transcribe
-            transcription = self.stt_service.transcribe_audio(self.audio_file)
-            
-            if transcription and transcription.strip():
-                print(f"📝 Transcribed: {transcription}")
+            # Get the final transcription from the service
+            if self.stt_service.current_text:
+                transcription = self.stt_service.current_text.strip()
+                print(f"📝 Final transcription: {transcription}")
                 
                 # Small delay to ensure hotkey is fully released
                 time.sleep(0.2)
                 
-                # Copy to clipboard first
+                # Copy to clipboard
                 self.stt_service.copy_to_clipboard(transcription)
                 
-                # Type the text
-                self.stt_service.type_text(transcription)
-                
-                # Show success notification
-                self._show_success_notification(transcription)
+                # Note: Text has already been typed in real-time, so no need to type again
+                # Just show success notification
+                self._show_success_notification("Real-time transcription complete")
             else:
                 print("❌ No speech detected")
                 self._show_error_notification("No speech detected")
                 
         except Exception as e:
-            print(f"❌ Transcription error: {e}")
-            self._show_error_notification(f"Transcription failed: {str(e)[:50]}")
-        finally:
-            # Clean up audio file
-            if self.audio_file and os.path.exists(self.audio_file):
-                try:
-                    os.unlink(self.audio_file)
-                except:
-                    pass
-                self.audio_file = None
+            print(f"❌ Transcription processing error: {e}")
+            self._show_error_notification(f"Processing failed: {str(e)[:50]}")
     
     def _show_success_notification(self, text):
         """Show success notification"""
@@ -293,7 +241,7 @@ class HotkeyService:
                 'Speech-to-Text Service', 
                 'Service started! Use Super+Space to record',
                 '--icon=audio-input-microphone',
-                '--expire-time=3000'
+                '--expire-time=2000'
             ], capture_output=True)
         except:
             pass
@@ -314,6 +262,32 @@ def main():
         print("❌ speech_to_text.py not found!")
         print("Make sure you're running this from the speech-to-text directory")
         sys.exit(1)
+    
+    # I had bugs somehow that this speech hotkey was running multiple times.
+    # And that is messy as it will type multiple times into the same text field.
+    # Also it will eat your API credits.
+    # So I added this check to kill any existing instances.
+    import subprocess
+    try:
+        result = subprocess.run(['pgrep', '-f', 'speech_hotkey.py'], capture_output=True, text=True)
+        existing_pids = result.stdout.strip().split('\n') if result.stdout.strip() else []
+        current_pid = str(os.getpid())
+        
+        # Filter out current process
+        other_pids = [pid for pid in existing_pids if pid != current_pid and pid]
+        
+        if other_pids:
+            print(f"⚠️ Found {len(other_pids)} existing speech-to-text instance(s)")
+            print("Killing existing instances to prevent conflicts...")
+            for pid in other_pids:
+                try:
+                    subprocess.run(['kill', pid], check=True)
+                    print(f"✅ Killed process {pid}")
+                except subprocess.CalledProcessError:
+                    print(f"❌ Failed to kill process {pid}")
+    except:
+        # If pgrep fails, continue anyway
+        pass
     
     try:
         service = HotkeyService()

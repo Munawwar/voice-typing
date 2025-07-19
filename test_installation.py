@@ -6,15 +6,15 @@ import subprocess
 def test_imports():
     """Test all required imports"""
     try:
-        import groq
-        import soundfile
-        import pyaudio  
+        import deepgram
         import pynput
         import tempfile
         import subprocess
+        import asyncio
+        from dotenv import load_dotenv
         
         print("✅ All Python packages imported successfully")
-        print(f"✅ Groq package version: {groq.__version__}")
+        print(f"✅ Deepgram package version: {deepgram.__version__}")
         
         return True
     except ImportError as e:
@@ -44,15 +44,15 @@ def test_system_tools():
     
     return success
 
-def test_groq_api_key():
-    """Test GROQ_API_KEY environment variable"""
-    api_key = os.environ.get('GROQ_API_KEY')
+def test_deepgram_api_key():
+    """Test DEEPGRAM_API_KEY environment variable"""
+    api_key = os.environ.get('DEEPGRAM_API_KEY')
     if api_key:
-        print("✅ GROQ_API_KEY environment variable is set")
+        print("✅ DEEPGRAM_API_KEY environment variable is set")
         return True
     else:
-        print("⚠️  GROQ_API_KEY environment variable not set")
-        print("   Set it with: export GROQ_API_KEY='your_api_key_here'")
+        print("⚠️  DEEPGRAM_API_KEY environment variable not set")
+        print("   Set it with: export DEEPGRAM_API_KEY='your_api_key_here'")
         return False
 
 if __name__ == "__main__":
@@ -62,7 +62,7 @@ if __name__ == "__main__":
     tests = [
         ("Python packages", test_imports),
         ("System tools", test_system_tools), 
-        ("Groq API key", test_groq_api_key)
+        ("Deepgram API key", test_deepgram_api_key)
     ]
     
     results = []
@@ -77,6 +77,6 @@ if __name__ == "__main__":
         print("1. Run: ./run.sh")
     else:
         print("⚠️  Some tests failed. Check the output above.")
-        if not os.environ.get('GROQ_API_KEY'):
-            print("💡 Don't forget to set your GROQ_API_KEY!")
+        if not os.environ.get('DEEPGRAM_API_KEY'):
+            print("💡 Don't forget to set your DEEPGRAM_API_KEY!")
         sys.exit(1)
