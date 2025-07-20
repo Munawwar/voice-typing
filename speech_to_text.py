@@ -51,6 +51,7 @@ class SpeechToTextService:
         self.dg_connection = None
         self.real_time_typing = False  # Flag to control real-time typing
         self.stop_requested = False  # Flag to stop recording via voice command
+        self.last_was_line_break = False  # Track if last action was any line break
         
         # Keywords for special commands
         self.delete_keywords = ["undo that"]
@@ -80,12 +81,24 @@ class SpeechToTextService:
                         # Check for voice commands BEFORE adding to transcription_parts
                         processed_sentence = service_self.process_voice_commands(sentence)
                         if processed_sentence is not None:
-                            # Only add to transcription_parts if it's not a command
-                            service_self.transcription_parts.append(processed_sentence)
-                            service_self.current_text += " " + processed_sentence
-                            # Type the final sentence immediately for real-time feedback
-                            if hasattr(service_self, 'real_time_typing') and service_self.real_time_typing:
-                                service_self.type_text(" " + processed_sentence)
+                            # Handle different types of processed sentences
+                            if processed_sentence in ["\n", "\n\n"]:
+                                # Formatting commands - add as-is to transcription_parts
+                                service_self.transcription_parts.append(processed_sentence)
+                                service_self.last_was_line_break = True
+                            else:
+                                # Regular text - add appropriate spacing/formatting
+                                space_prefix = " " if service_self.current_text and not service_self.last_was_line_break else ""
+                                text_with_spacing = space_prefix + processed_sentence
+                                
+                                # Add the text WITH spacing to transcription_parts for proper undo
+                                service_self.transcription_parts.append(text_with_spacing)
+                                service_self.current_text += text_with_spacing
+                                service_self.last_was_line_break = False
+                                
+                                # Type the final sentence immediately for real-time feedback
+                                if hasattr(service_self, 'real_time_typing') and service_self.real_time_typing:
+                                    service_self.type_text(text_with_spacing)
                     else:
                         print(f"💭 Interim: {sentence}")
 
@@ -155,8 +168,8 @@ class SpeechToTextService:
         if any(escape in sentence_lower for escape in self.escape_keywords):
             print(f"🔤 Literal text detected: {sentence}")
             # Remove the escape word and return the rest as literal text
-            for escape in self.escape_keywords:
-                sentence = sentence.replace(escape, "").replace(escape.capitalize(), "").strip()
+            # for escape in self.escape_keywords:
+            #     sentence = sentence.replace(escape, "").replace(escape.capitalize(), "").strip()
             return sentence
         
         # Check for delete command
@@ -167,12 +180,12 @@ class SpeechToTextService:
         # Check for newline command
         if any(keyword in sentence_lower for keyword in self.newline_keywords):
             self.handle_newline_command()
-            return None  # Don't add this sentence to text
+            return "\n"  # Add newline marker to transcription_parts for undo tracking
         
         # Check for paragraph command
         if any(keyword in sentence_lower for keyword in self.paragraph_keywords):
             self.handle_paragraph_command()
-            return None  # Don't add this sentence to text
+            return "\n\n"  # Add paragraph marker to transcription_parts for undo tracking
         
         # Check for stop recording command
         if any(keyword in sentence_lower for keyword in self.stop_keywords):
@@ -190,11 +203,25 @@ class SpeechToTextService:
         if self.transcription_parts:
             removed = self.transcription_parts.pop()
             print(f"🗑️ Removed: {removed}")
-            # Rebuild current text
-            self.current_text = " ".join(self.transcription_parts)
-            # Type backspaces to visually remove the text
-            if self.real_time_typing:
-                self.type_backspaces(len(removed) + 1)  # +1 for the space
+            
+            # Handle different types of removals
+            if removed == "\n":
+                # Removing a newline command
+                if self.real_time_typing:
+                    self.type_key_combination(['BackSpace'])  # Remove the newline
+            elif removed == "\n\n":
+                # Removing a paragraph command (double newline)
+                if self.real_time_typing:
+                    self.type_key_combination(['BackSpace'])  # Remove first newline
+                    self.type_key_combination(['BackSpace'])  # Remove second newline
+            else:
+                # Removing regular text (with its spacing already included)
+                if self.real_time_typing:
+                    self.type_backspaces(len(removed))  # No +1 needed, spacing already included
+            
+            # Rebuild current text (filter out newline markers)
+            text_parts = [part for part in self.transcription_parts if part not in ["\n", "\n\n"]]
+            self.current_text = "".join(text_parts)  # Use join without separator since spacing is already included
     
     def handle_newline_command(self):
         """Handle newline command to add a single line break"""
