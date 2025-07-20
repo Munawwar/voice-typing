@@ -60,6 +60,9 @@ class SpeechToTextService:
         self.stop_keywords = ["end voice", "end recording", "stop recording", "stop voice"]
         self.escape_keywords = ["literal", "literally"]
         
+        # Track last complete sentence for correction commands
+        self.last_sentence = ""
+        
     def setup_live_transcription(self):
         """Setup live transcription connection"""
         try:
@@ -143,7 +146,7 @@ class SpeechToTextService:
                 profanity_filter=True,
                 # Remove words like "um" and "uh"
                 filler_words=True,
-                keyterm=["UNDO", "THAT", "NEWLINE", "NEW", "LINE", "PARA", "PARAGRAPH", "LITERAL", "LITERALLY", "END", "VOICE", "RECORDING", "STOP"],
+                keyterm=["UNDO", "THAT", "WORD", "WORDS", "LAST", "CORRECT", "WITH", "NEWLINE", "NEW", "LINE", "PARA", "PARAGRAPH", "LITERAL", "LITERALLY", "END", "VOICE", "RECORDING", "STOP"],
                 # Convert numeric words to numbers
                 numerals=True,
                 tag="voice-typing"
@@ -172,6 +175,19 @@ class SpeechToTextService:
             #     sentence = sentence.replace(escape, "").replace(escape.capitalize(), "").strip()
             return sentence
         
+        # Check for undo word commands (undo last X words, undo word)
+        if self.is_undo_words_command(sentence_lower):
+            word_count = self.extract_word_count_from_undo(sentence_lower)
+            self.handle_undo_words_command(word_count)
+            return None
+        
+        # Check for correct X with Y command
+        if self.is_correct_command(sentence_lower):
+            old_word, new_word = self.extract_correction_words(sentence_lower)
+            if old_word and new_word:
+                self.handle_correct_command(old_word, new_word)
+                return None
+        
         # Check for delete command
         if any(keyword in sentence_lower for keyword in self.delete_keywords):
             self.handle_delete_command()
@@ -192,7 +208,8 @@ class SpeechToTextService:
             self.handle_stop_command()
             return None  # Don't add this sentence to text
         
-        # No command detected, return sentence as-is
+        # No command detected, store as last sentence and return as-is
+        self.last_sentence = sentence
         return sentence
     
     def handle_delete_command(self):
@@ -240,6 +257,84 @@ class SpeechToTextService:
         print(f"🛑 Stop command detected - ending recording")
         # Set a flag that can be checked by the streaming loop
         self.stop_requested = True
+    
+    def is_undo_words_command(self, sentence_lower):
+        """Check if sentence contains undo words command"""
+        return ("undo word" in sentence_lower or 
+                "undo last" in sentence_lower and "word" in sentence_lower)
+    
+    def extract_word_count_from_undo(self, sentence_lower):
+        """Extract word count from undo command"""
+        if "undo word" in sentence_lower and "undo last" not in sentence_lower:
+            return 1
+        
+        # Look for patterns like "undo last 3 words", "undo last three words"
+        import re
+        
+        # Number patterns
+        number_match = re.search(r'undo last (\d+) word', sentence_lower)
+        if number_match:
+            return int(number_match.group(1))
+        
+        # Written number patterns
+        word_numbers = {
+            'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
+        }
+        
+        for word_num, count in word_numbers.items():
+            if f"undo last {word_num} word" in sentence_lower:
+                return count
+        
+        return 1  # Default to 1 word
+    
+    def is_correct_command(self, sentence_lower):
+        """Check if sentence contains correct X with Y command"""
+        return "correct" in sentence_lower and "with" in sentence_lower
+    
+    def extract_correction_words(self, sentence_lower):
+        """Extract old and new words from correct command"""
+        import re
+        
+        # Pattern: "correct X with Y"
+        match = re.search(r'correct (.+?) with (.+?)(?:\s|$)', sentence_lower)
+        if match:
+            old_word = match.group(1).strip()
+            new_word = match.group(2).strip()
+            return old_word, new_word
+        
+        return None, None
+    
+    def handle_undo_words_command(self, word_count):
+        """Handle undo words command using cursor navigation"""
+        print(f"🗑️ Undo {word_count} word(s) command detected")
+        
+        if self.real_time_typing:
+            # Use Ctrl+Shift+Left Arrow to select words, then Backspace
+            for _ in range(word_count):
+                self.type_key_combination(['ctrl', 'shift', 'Left'])
+            self.type_key_combination(['BackSpace'])
+    
+    def handle_correct_command(self, old_word, new_word):
+        """Handle correct X with Y command by replacing last sentence"""
+        print(f"🔄 Correct '{old_word}' with '{new_word}' command detected")
+        
+        if not self.last_sentence:
+            print("❌ No previous sentence to correct")
+            return
+        
+        # Create corrected sentence
+        corrected_sentence = self.last_sentence.replace(old_word, new_word)
+        corrected_sentence = corrected_sentence.replace(old_word.capitalize(), new_word.capitalize())
+        
+        if self.real_time_typing:
+            # Erase the last sentence by selecting all text in current line and replacing
+            self.type_key_combination(['ctrl', 'shift', 'Home'])  # Select to beginning of line
+            self.type_key_combination(['BackSpace'])  # Delete selected text
+            self.type_text(corrected_sentence)  # Type corrected sentence
+        
+        # Update last sentence
+        self.last_sentence = corrected_sentence
     
     def type_newline(self):
         """Type a single newline (Shift+Enter)"""
