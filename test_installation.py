@@ -27,9 +27,9 @@ def test_system_tools():
     
     tools_to_test = []
     if display_server == 'wayland':
-        tools_to_test = ['wtype', 'ydotool', 'wl-copy']
+        tools_to_test = ['wtype', 'ydotool']
     else:
-        tools_to_test = ['xdotool', 'xclip']
+        tools_to_test = ['xdotool']
     
     tools_to_test.extend(['pactl', 'notify-send'])
     

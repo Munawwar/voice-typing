@@ -89,18 +89,14 @@ if [[ "$DISPLAY_SERVER" == "wayland" ]]; then
     PACKAGES+=(
         "wtype"
         "ydotool"  
-        "wl-clipboard"
         "xdotool"
-        "xclip"
     )
 else
     log_info "Installing X11 tools (primary) + Wayland tools (fallback)..."
     PACKAGES+=(
         "xdotool"
-        "xclip"
         "wtype"
         "ydotool"
-        "wl-clipboard"
     )
 fi
 
@@ -250,9 +246,9 @@ def test_system_tools():
     
     tools_to_test = []
     if display_server == 'wayland':
-        tools_to_test = ['wtype', 'ydotool', 'wl-copy']
+        tools_to_test = ['wtype', 'ydotool']
     else:
-        tools_to_test = ['xdotool', 'xclip']
+        tools_to_test = ['xdotool']
     
     tools_to_test.extend(['pactl', 'notify-send'])
     
@@ -333,7 +329,7 @@ Features keyword detection (say "delete" to remove last transcription segment)
    ```
 
 3. **Use hotkey:** Press `Super+Space` to start streaming, press again to stop and type
-   - Text is automatically copied to clipboard and typed to the active window
+   - Text is automatically typed to the active window in real-time
 
 4. **Single streaming session:**
    ```bash

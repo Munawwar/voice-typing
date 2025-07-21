@@ -27,7 +27,7 @@ Press `Super+Space` to start streaming transcription, press again to stop and ty
 | `end voice` / `stop recording` | Stop transcription |
 | `literal` / `literally` | Treat following text as literal (no commands) |
 
-Text is automatically typed to the active window and oncopied to clipboard.
+Text is automatically typed to the active window in real-time.
 
 ## Other Uses Cases
 
@@ -42,10 +42,6 @@ Text is automatically typed to the active window and oncopied to clipboard.
    python speech_to_text.py -c  # Interactive streaming mode
    ```
 
-3. **Copy to clipboard:**
-   ```bash
-   python speech_to_text.py --copy-to-clipboard -d 5  # Copy transcription to clipboard
-   ```
 
 ## Why Deepgram Streaming API?
 

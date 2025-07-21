@@ -296,11 +296,15 @@ class SpeechToTextService:
         """Extract old and new words from correct command"""
         import re
         
-        # Pattern: "correct X with Y"
-        match = re.search(r'correct (.+?) with (.+?)(?:\s|$)', sentence_lower)
+        # Pattern: "correct X with Y" - capture everything after "with" up to end or punctuation
+        match = re.search(r'correct\s+(.+?)\s+with\s+(.+?)(?:\s*[.!?]*\s*$|$)', sentence_lower)
         if match:
             old_word = match.group(1).strip()
             new_word = match.group(2).strip()
+            
+            # Remove trailing punctuation from the new word (in case "correct." was heard with a trailing period)
+            new_word = re.sub(r'[.!?]+$', '', new_word).strip()
+            
             return old_word, new_word
         
         return None, None
@@ -316,25 +320,40 @@ class SpeechToTextService:
             self.type_key_combination(['BackSpace'])
     
     def handle_correct_command(self, old_word, new_word):
-        """Handle correct X with Y command by replacing last sentence"""
+        """Handle correct X with Y command by replacing last transcription part"""
         print(f"🔄 Correct '{old_word}' with '{new_word}' command detected")
         
-        if not self.last_sentence:
-            print("❌ No previous sentence to correct")
+        if not self.transcription_parts:
+            print("❌ No previous transcription to correct")
             return
         
-        # Create corrected sentence
-        corrected_sentence = self.last_sentence.replace(old_word, new_word)
-        corrected_sentence = corrected_sentence.replace(old_word.capitalize(), new_word.capitalize())
+        # Get the last transcription part (which should be the last sentence/text)
+        last_part = self.transcription_parts[-1]
+        
+        # Skip if it's just formatting (newlines)
+        if last_part in ["\n", "\n\n"]:
+            print("❌ Cannot correct formatting commands")
+            return
+        
+        # Create corrected text by replacing in the last transcription part
+        corrected_text = last_part.replace(old_word, new_word)
+        corrected_text = corrected_text.replace(old_word.capitalize(), new_word.capitalize())
         
         if self.real_time_typing:
-            # Erase the last sentence by selecting all text in current line and replacing
-            self.type_key_combination(['ctrl', 'shift', 'Home'])  # Select to beginning of line
-            self.type_key_combination(['BackSpace'])  # Delete selected text
-            self.type_text(corrected_sentence)  # Type corrected sentence
+            # Remove the last transcription part by typing backspaces
+            self.type_backspaces(len(last_part))
+            # Type the corrected text
+            self.type_text(corrected_text)
         
-        # Update last sentence
-        self.last_sentence = corrected_sentence
+        # Update the transcription_parts with corrected text
+        self.transcription_parts[-1] = corrected_text
+        
+        # Rebuild current text
+        text_parts = [part for part in self.transcription_parts if part not in ["\n", "\n\n"]]
+        self.current_text = "".join(text_parts)
+        
+        # Update last sentence for potential future corrections
+        self.last_sentence = corrected_text.strip()
     
     def type_newline(self):
         """Type a single newline (Shift+Enter)"""
@@ -476,29 +495,21 @@ class SpeechToTextService:
             methods = [
                 ('wtype', lambda: subprocess.run(['wtype', text], check=True, capture_output=True)),
                 ('ydotool', lambda: subprocess.run(['ydotool', 'type', text], check=True, capture_output=True)),
-                ('clipboard', lambda: self._type_via_clipboard(text)),
                 ('xdotool', lambda: subprocess.run(['xdotool', 'type', '--delay', '50', text], check=True, capture_output=True))
             ]
         else:
             methods = [
                 ('xdotool', lambda: subprocess.run(['xdotool', 'type', '--delay', '50', text], check=True, capture_output=True)),
                 ('wtype', lambda: subprocess.run(['wtype', text], check=True, capture_output=True)),
-                ('ydotool', lambda: subprocess.run(['ydotool', 'type', text], check=True, capture_output=True)),
-                ('clipboard', lambda: self._type_via_clipboard(text))
+                ('ydotool', lambda: subprocess.run(['ydotool', 'type', text], check=True, capture_output=True))
             ]
         
         # Try each method until one works
         for method_name, method_func in methods:
             try:
-                if method_name == 'clipboard':
-                    success = method_func()
-                    if success:
-                        print(f"✅ Typed via {method_name}: {text}")
-                        return
-                else:
-                    method_func()
-                    print(f"✅ Typed via {method_name}: {text}")
-                    return
+                method_func()
+                print(f"✅ Typed via {method_name}: {text}")
+                return
             except (subprocess.CalledProcessError, FileNotFoundError):
                 continue
         
@@ -508,78 +519,6 @@ class SpeechToTextService:
         print(f"'{text}'")
         self._suggest_typing_tools()
     
-    def copy_to_clipboard(self, text):
-        """Copy text to clipboard without typing it"""
-        if not text:
-            print("❌ No text to copy")
-            return False
-        
-        display_server = os.environ.get('XDG_SESSION_TYPE', 'x11')
-        
-        # Try clipboard tools in order of preference based on display server
-        if display_server == 'wayland':
-            clipboard_tools = [
-                ['wl-copy'],
-                ['xclip', '-selection', 'clipboard'],
-                ['xsel', '--clipboard', '--input']
-            ]
-        else:
-            clipboard_tools = [
-                ['xclip', '-selection', 'clipboard'],
-                ['xsel', '--clipboard', '--input'],
-                ['wl-copy']
-            ]
-        
-        for tool in clipboard_tools:
-            try:
-                # Try to use the tool directly
-                subprocess.run(tool, input=text.encode(), check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                print(f"📋 Copied to clipboard via {tool[0]}: {text}")
-                return True
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                continue
-        
-        print("❌ No working clipboard tool found")
-        return False
-    
-    def _type_via_clipboard(self, text):
-        """Type text via clipboard (works on both X11 and Wayland)"""
-        try:
-            # Detect clipboard tool
-            clipboard_copy = None
-            
-            # Try Wayland clipboard first
-            try:
-                subprocess.run(['wl-copy', '--version'], check=True, capture_output=True)
-                clipboard_copy = ['wl-copy']
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                pass
-            
-            # Fallback to X11 clipboard
-            if not clipboard_copy:
-                try:
-                    subprocess.run(['xclip', '-version'], check=True, capture_output=True)
-                    clipboard_copy = ['xclip', '-selection', 'clipboard']
-                except (subprocess.CalledProcessError, FileNotFoundError):
-                    return False
-            
-            # Copy to clipboard
-            subprocess.run(clipboard_copy, input=text.encode(), check=True)
-            
-            # Small delay
-            time.sleep(0.1)
-            
-            # Paste using appropriate method
-            display_server = os.environ.get('XDG_SESSION_TYPE', 'x11')
-            if display_server == 'wayland':
-                subprocess.run(['ydotool', 'key', 'ctrl+v'], check=True)
-            else:
-                subprocess.run(['xdotool', 'key', 'ctrl+v'], check=True)
-            
-            return True
-            
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return False
     
     def _suggest_typing_tools(self):
         """Suggest installation of typing tools based on display server"""
@@ -589,18 +528,18 @@ class SpeechToTextService:
         
         if display_server == 'wayland':
             print("Primary (Wayland):")
-            print("  sudo apt install wtype ydotool wl-clipboard")
+            print("  sudo apt install wtype ydotool")
             print("  sudo systemctl enable --now ydotoold")
             print("  sudo usermod -a -G input $USER")
             print("\nFallback (X11 compatibility):")
-            print("  sudo apt install xdotool xclip")
+            print("  sudo apt install xdotool")
         else:
             print("Primary (X11):")
-            print("  sudo apt install xdotool xclip")
+            print("  sudo apt install xdotool")
             print("\nFallback (Wayland compatibility):")
-            print("  sudo apt install wtype ydotool wl-clipboard")
+            print("  sudo apt install wtype ydotool")
     
-    async def start_continuous_mode(self, copy_to_clipboard=False, no_type=False):
+    async def start_continuous_mode(self, no_type=False):
         """Start continuous streaming speech recognition"""
         print("🎤 Starting continuous streaming mode...")
         print("Press Enter to start streaming, then Enter again to stop and process")
@@ -634,8 +573,6 @@ class SpeechToTextService:
             if self.current_text:
                 transcription = self.current_text.strip()
                 print(f"📝 Final transcription: {transcription}")
-                if copy_to_clipboard:
-                    self.copy_to_clipboard(transcription)
                 if not no_type:
                     self.type_text(transcription)
             else:
@@ -650,8 +587,6 @@ async def main():
                        help='Streaming duration in seconds (default: 5)')
     parser.add_argument('--no-type', action='store_true',
                        help='Don\'t type the result, just print it')
-    parser.add_argument('--copy-to-clipboard', action='store_true',
-                       help='Copy transcribed text to clipboard')
     
     args = parser.parse_args()
     
@@ -671,8 +606,6 @@ async def main():
         transcription = stt_service.transcribe_audio(args.file)
         if transcription:
             print(f"📝 Transcription: {transcription}")
-            if args.copy_to_clipboard:
-                stt_service.copy_to_clipboard(transcription)
             if not args.no_type:
                 stt_service.type_text(transcription)
         else:
@@ -682,7 +615,6 @@ async def main():
         # Start continuous streaming mode
         try:
             await stt_service.start_continuous_mode(
-                copy_to_clipboard=args.copy_to_clipboard,
                 no_type=args.no_type
             )
         except KeyboardInterrupt:
@@ -697,8 +629,6 @@ async def main():
         
         if transcription:
             print(f"📝 Transcription: {transcription}")
-            if args.copy_to_clipboard:
-                stt_service.copy_to_clipboard(transcription)
             if not args.no_type:
                 stt_service.type_text(transcription)
         else:

@@ -179,12 +179,10 @@ class HotkeyService:
                 # Small delay to ensure hotkey is fully released
                 time.sleep(0.2)
                 
-                # Copy to clipboard
-                self.stt_service.copy_to_clipboard(transcription)
                 
                 # Note: Text has already been typed in real-time, so no need to type again
                 # Just show success notification
-                self._show_success_notification("Real-time transcription complete")
+                self._show_success_notification()
             else:
                 print("❌ No speech detected")
                 self._show_error_notification("No speech detected")
@@ -193,7 +191,7 @@ class HotkeyService:
             print(f"❌ Transcription processing error: {e}")
             self._show_error_notification(f"Processing failed: {str(e)[:50]}")
     
-    def _show_success_notification(self, text):
+    def _show_success_notification(self):
         """Show success notification"""
         try:
             subprocess.run([
