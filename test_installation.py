@@ -73,8 +73,6 @@ if __name__ == "__main__":
     print("\n" + "=" * 40)
     if all(results):
         print("🎉 All tests passed! Installation successful!")
-        print("\nNext steps:")
-        print("1. Run: ./run.sh")
     else:
         print("⚠️  Some tests failed. Check the output above.")
         if not os.environ.get('DEEPGRAM_API_KEY'):

@@ -373,39 +373,94 @@ class SpeechToTextService:
         """Type a key combination using available tools"""
         display_server = os.environ.get('XDG_SESSION_TYPE', 'x11')
         
-        # Convert keys to appropriate format for each tool
-        key_string = '+'.join(keys)
+        # Define proper key mappings for each tool based on official documentation
+        KEY_MAPPINGS = {
+            'xdotool': {
+                # xdotool uses X11 keysym names
+                'BackSpace': 'BackSpace',
+                'Return': 'Return', 
+                'shift': 'shift',  # alias for Shift_L
+            },
+            'ydotool': {
+                # ydotool uses Linux kernel input event codes
+                'BackSpace': 'Backspace',  # note lowercase 's'
+                'Return': 'enter',         # ydotool uses 'enter' not 'return'
+                'shift': 'shift',
+            },
+            'wtype': {
+                # wtype has limited key combination support
+                'BackSpace': 'backspace',  # named key in libxkbcommon
+                'Return': 'enter',
+                'shift': 'shift',
+            }
+        }
+        
+        def build_command_for_tool(keys, tool):
+            """Build the appropriate command for each tool"""
+            mapping = KEY_MAPPINGS.get(tool, {})
+            
+            if tool == 'xdotool':
+                # xdotool: key combination with +
+                mapped_keys = [mapping.get(k, k) for k in keys]
+                return ['xdotool', 'key', '+'.join(mapped_keys)]
+                
+            elif tool == 'ydotool':
+                # ydotool: key combination with +
+                mapped_keys = [mapping.get(k, k) for k in keys]
+                return ['ydotool', 'key', '+'.join(mapped_keys)]
+                
+            elif tool == 'wtype':
+                # wtype: special handling required
+                return self._build_wtype_command(keys, mapping)
+            
+            return None
         
         if display_server == 'wayland':
-            methods = [
-                ('ydotool', lambda: subprocess.run(['ydotool', 'key'] + [f'{k.lower()}:{1 if k != "shift" else 1}' for k in keys], check=True, capture_output=True)),
-                ('wtype', lambda: self._wtype_key_combo(keys)),
-            ]
+            # Wayland: try ydotool first, then wtype, then xdotool as fallback
+            tools = ['ydotool', 'wtype', 'xdotool']
         else:
-            methods = [
-                ('xdotool', lambda: subprocess.run(['xdotool', 'key', key_string], check=True, capture_output=True)),
-            ]
+            # X11: try xdotool first, then others as fallback
+            tools = ['xdotool', 'ydotool', 'wtype']
+        
+        methods = []
+        for tool in tools:
+            cmd = build_command_for_tool(keys, tool)
+            if cmd:
+                if callable(cmd):
+                    # wtype returns a function
+                    methods.append((tool, cmd))
+                else:
+                    # other tools return command arrays
+                    methods.append((tool, lambda c=cmd: subprocess.run(c, check=True, capture_output=True)))
         
         # Try each method until one works
+        key_combo_str = '+'.join(keys)
         for method_name, method_func in methods:
             try:
                 method_func()
-                print(f"✅ Typed key combo via {method_name}: {key_string}")
+                print(f"✅ Typed key combo via {method_name}: {key_combo_str}")
                 return
             except (subprocess.CalledProcessError, FileNotFoundError):
                 continue
         
-        print(f"❌ Failed to type key combination: {key_string}")
+        print(f"❌ Failed to type key combination: {key_combo_str}")
     
-    def _wtype_key_combo(self, keys):
-        """Handle key combinations for wtype (limited support)"""
-        if keys == ['shift', 'Return']:
-            # wtype doesn't support shift+enter, so just send enter
-            subprocess.run(['wtype', '\n'], check=True)
-        elif keys == ['BackSpace']:
-            subprocess.run(['wtype', '\b'], check=True)
-        else:
-            raise subprocess.CalledProcessError(1, 'wtype')
+    def _build_wtype_command(self, keys, mapping):
+        """Build wtype command - has limited key combination support"""
+        if len(keys) == 1:
+            key = keys[0]
+            if key == 'BackSpace':
+                # wtype can send backspace character
+                return lambda: subprocess.run(['wtype', '-P', 'backspace', '-p', 'backspace'], check=True, capture_output=True)
+            elif key == 'Return':
+                # wtype can send enter
+                return lambda: subprocess.run(['wtype', '-P', 'enter', '-p', 'enter'], check=True, capture_output=True)
+        elif keys == ['shift', 'Return']:
+            # wtype doesn't support shift+enter well, just send enter
+            return lambda: subprocess.run(['wtype', '-P', 'enter', '-p', 'enter'], check=True, capture_output=True)
+        
+        # wtype doesn't support this combination
+        return None
         
     async def start_streaming(self, duration=None, real_time_typing=False):
         """Start streaming transcription"""
@@ -425,6 +480,20 @@ class SpeechToTextService:
             print("🎤 Starting microphone...")
             self.microphone.start()
             
+            # Show ready notification (for hotkey mode)
+            if real_time_typing:
+                try:
+                    import subprocess
+                    subprocess.run([
+                        'notify-send', 
+                        'Voice Typing Ready!', 
+                        'Focus on a text field and start talking. Say "stop voice" or press Super+] again to stop.',
+                        '--icon=audio-input-microphone',
+                        '--expire-time=5000'
+                    ], capture_output=True)
+                except:
+                    pass
+            
             if duration:
                 print(f"🎤 Streaming for {duration} seconds...")
                 await asyncio.sleep(duration)
@@ -440,6 +509,19 @@ class SpeechToTextService:
             # Stop microphone and connection
             self.microphone.finish()
             self.dg_connection.finish()
+            
+            # Show stop notification
+            try:
+                import subprocess
+                subprocess.run([
+                    'notify-send', 
+                    'Voice Typing Stopped', 
+                    'Recording ended.',
+                    '--icon=audio-input-microphone-muted',
+                    '--expire-time=3000'
+                ], capture_output=True)
+            except:
+                pass
             
             # Return the final transcription
             final_text = self.current_text.strip()

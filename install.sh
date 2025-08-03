@@ -100,15 +100,178 @@ else
     )
 fi
 
-# Install packages
-log_info "Installing: ${PACKAGES[*]}"
-sudo apt install -y "${PACKAGES[@]}"
+# Install packages with error handling
+log_info "Installing essential packages..."
+ESSENTIAL_PACKAGES=(
+    "build-essential"
+    "libnotify-bin"
+    "python3-venv"
+    "python3-dev"
+    "python3-pip"
+    "git"
+    "curl"
+    "wget"
+)
 
-# Configure ydotool for Wayland support
+# Install essential packages first
+sudo apt install -y "${ESSENTIAL_PACKAGES[@]}"
+
+# Install typing tools with fallback handling
+log_info "Installing typing tools..."
+TYPING_TOOLS_INSTALLED=()
+
+if [[ "$DISPLAY_SERVER" == "wayland" ]]; then
+    log_info "Installing Wayland typing tools..."
+    
+    # Try to install wtype (may not be in standard repos)
+    if sudo apt install -y wtype 2>/dev/null; then
+        TYPING_TOOLS_INSTALLED+=("wtype")
+        log_success "wtype installed successfully"
+    else
+        log_warning "wtype not available in repositories"
+        log_info "You can install manually from: https://github.com/atx/wtype"
+    fi
+    
+    # Try to install ydotool
+    if sudo apt install -y ydotool 2>/dev/null; then
+        TYPING_TOOLS_INSTALLED+=("ydotool")
+        log_success "ydotool installed successfully"
+    else
+        log_warning "ydotool not available in repositories"
+    fi
+    
+    # Install xdotool as fallback
+    if sudo apt install -y xdotool 2>/dev/null; then
+        TYPING_TOOLS_INSTALLED+=("xdotool")
+        log_success "xdotool installed as fallback"
+    fi
+else
+    log_info "Installing X11 typing tools..."
+    
+    # Install xdotool (primary for X11)
+    if sudo apt install -y xdotool 2>/dev/null; then
+        TYPING_TOOLS_INSTALLED+=("xdotool")
+        log_success "xdotool installed successfully"
+    else
+        log_error "Failed to install xdotool - this is required for X11"
+        exit 1
+    fi
+    
+    # Install Wayland tools as backup
+    sudo apt install -y wtype ydotool 2>/dev/null || log_warning "Wayland tools installation optional"
+fi
+
+if [[ ${#TYPING_TOOLS_INSTALLED[@]} -eq 0 ]]; then
+    log_error "No typing tools were installed successfully!"
+    log_info "Manual installation required:"
+    log_info "- For X11: sudo apt install xdotool"
+    log_info "- For Wayland: install wtype and ydotool manually"
+    exit 1
+else
+    log_success "Typing tools installed: ${TYPING_TOOLS_INSTALLED[*]}"
+fi
+
+# Install/upgrade ydotool for better Wayland support
+log_info "Checking ydotool installation..."
+
+# Check if ydotool is installed via APT (old version)
+APT_YDOTOOL_VERSION=""
+if apt list --installed ydotool 2>/dev/null | grep -q "ydotool/"; then
+    APT_YDOTOOL_VERSION=$(apt list --installed ydotool 2>/dev/null | grep "ydotool/" | cut -d' ' -f2)
+    log_warning "Found old ydotool version from APT: $APT_YDOTOOL_VERSION"
+    log_info "Ubuntu's ydotool package is outdated and causes latency issues"
+    
+    read -p "Remove old ydotool and install latest version v1.0.4? (Y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        log_info "Removing old ydotool..."
+        sudo apt remove -y ydotool ydotoold 2>/dev/null || true
+        sudo apt autoremove -y 2>/dev/null || true
+        INSTALL_LATEST_YDOTOOL=true
+    else
+        log_warning "Keeping old ydotool - may have latency issues"
+        INSTALL_LATEST_YDOTOOL=false
+    fi
+else
+    # No APT version, check if we have a newer version already
+    if command -v ydotool >/dev/null 2>&1; then
+        CURRENT_VERSION=$(ydotool help 2>&1 | head -1 | grep -o "v[0-9]\+\.[0-9]\+\.[0-9]\+" || echo "unknown")
+        if [[ "$CURRENT_VERSION" == "v1.0.4" ]]; then
+            log_success "Latest ydotool v1.0.4 already installed"
+            INSTALL_LATEST_YDOTOOL=false
+        else
+            log_info "Found ydotool version: $CURRENT_VERSION (upgrading to v1.0.4)"
+            INSTALL_LATEST_YDOTOOL=true
+        fi
+    else
+        log_info "ydotool not found - installing latest version v1.0.4"
+        INSTALL_LATEST_YDOTOOL=true
+    fi
+fi
+
+# Install latest ydotool if needed
+if [[ "$INSTALL_LATEST_YDOTOOL" == "true" ]]; then
+    log_info "Installing latest ydotool v1.0.4..."
+    
+    # Create temporary directory
+    TEMP_DIR=$(mktemp -d)
+    cd "$TEMP_DIR"
+    
+    # Download latest binaries
+    log_info "Downloading ydotool binaries..."
+    if wget -O ydotool https://github.com/ReimuNotMoe/ydotool/releases/download/v1.0.4/ydotool-release-ubuntu-latest 2>/dev/null &&
+       wget -O ydotoold https://github.com/ReimuNotMoe/ydotool/releases/download/v1.0.4/ydotoold-release-ubuntu-latest 2>/dev/null; then
+        
+        # Make executable and install
+        chmod +x ydotool ydotoold
+        sudo cp ydotool /usr/local/bin/ydotool
+        sudo cp ydotoold /usr/local/bin/ydotoold
+        
+        log_success "ydotool v1.0.4 installed successfully"
+        
+        # Create systemd service
+        log_info "Setting up ydotoold daemon..."
+        sudo tee /etc/systemd/system/ydotoold.service > /dev/null << 'EOF'
+[Unit]
+Description=ydotool daemon
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ydotoold
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        
+        # Start and enable service
+        sudo systemctl daemon-reload
+        if sudo systemctl enable ydotoold 2>/dev/null && sudo systemctl start ydotoold 2>/dev/null; then
+            log_success "ydotoold daemon started successfully"
+        else
+            log_warning "Failed to start ydotoold daemon - will work with latency"
+        fi
+        
+    else
+        log_error "Failed to download ydotool binaries"
+        log_info "Falling back to APT installation..."
+        sudo apt install -y ydotool 2>/dev/null || log_warning "APT installation also failed"
+    fi
+    
+    # Cleanup
+    cd - > /dev/null
+    rm -rf "$TEMP_DIR"
+fi
+
+# Configure user permissions
 if command -v ydotool >/dev/null 2>&1; then
-    log_info "Configuring ydotool..."
-    sudo systemctl enable --now ydotoold 2>/dev/null || log_warning "ydotoold setup skipped"
-    sudo usermod -a -G input "$USER" 2>/dev/null || log_warning "input group assignment skipped"
+    if sudo usermod -a -G input "$USER" 2>/dev/null; then
+        log_success "Added user to input group"
+        log_info "You may need to log out and back in for group changes to take effect"
+    else
+        log_warning "Failed to add user to input group - ydotool may need manual setup"
+    fi
 fi
 
 # Step 4: Set up project directory
@@ -292,8 +455,6 @@ if __name__ == "__main__":
     print("\n" + "=" * 40)
     if all(results):
         print("🎉 All tests passed! Installation successful!")
-        print("\nNext steps:")
-        print("1. Run: ./run.sh")
     else:
         print("⚠️  Some tests failed. Check the output above.")
         if not os.environ.get('DEEPGRAM_API_KEY'):
@@ -304,94 +465,104 @@ EOF
 # Run test
 python test_installation.py
 
+# Step 11: Setup GNOME hotkey for Wayland users
+log_info "Setting up desktop hotkey integration..."
+
+# Create command that activates venv and runs the script
+PROJECT_DIR="$(pwd)"
+
+# Include DEEPGRAM_API_KEY in the command if it's set
+if [[ -n "$DEEPGRAM_API_KEY" ]]; then
+    SCRIPT_COMMAND="/bin/bash -c \"cd $PROJECT_DIR && source venv/bin/activate && env DEEPGRAM_API_KEY='$DEEPGRAM_API_KEY' python speech_hotkey.py --hotkey\""
+    log_success "DEEPGRAM_API_KEY will be included in hotkey command"
+else
+    SCRIPT_COMMAND="/bin/bash -c \"cd $PROJECT_DIR && source venv/bin/activate && python speech_hotkey.py --hotkey\""
+    log_warning "DEEPGRAM_API_KEY not set - hotkey may not work until API key is configured"
+    log_info "After setting your API key, re-run the install script to update the hotkey command"
+fi
+
+# Check if we're on GNOME (common on Ubuntu)
+if [[ "$XDG_CURRENT_DESKTOP" == *"GNOME"* ]] || [[ "$DESKTOP_SESSION" == *"gnome"* ]] || command -v gnome-shell >/dev/null 2>&1; then
+    log_info "GNOME detected - setting up Super+] hotkey..."
+    
+    # Find an available custom shortcut slot
+    SHORTCUT_INDEX=""
+    for i in {0..9}; do
+        EXISTING_NAME=$(gsettings get org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom$i/ name 2>/dev/null)
+        if [[ -z "$EXISTING_NAME" ]] || [[ "$EXISTING_NAME" == "''" ]]; then
+            SHORTCUT_INDEX=$i
+            break
+        fi
+    done
+    
+    if [[ -n "$SHORTCUT_INDEX" ]]; then
+        # Set up the custom keybinding
+        KEYBINDING_PATH="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom$SHORTCUT_INDEX/"
+        
+        # Configure the shortcut
+        if gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$KEYBINDING_PATH name 'Speech-to-Text Toggle' 2>/dev/null &&
+           gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$KEYBINDING_PATH command "$SCRIPT_COMMAND" 2>/dev/null &&
+           gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$KEYBINDING_PATH binding '<Super>bracketright' 2>/dev/null; then
+            
+            # Add to the list of custom keybindings
+            CURRENT_KEYBINDINGS=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings 2>/dev/null)
+            if [[ "$CURRENT_KEYBINDINGS" == "@as []" ]]; then
+                # No existing keybindings
+                if gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['$KEYBINDING_PATH']" 2>/dev/null; then
+                    log_success "GNOME hotkey configured: Super+] → Speech-to-Text"
+                    log_info "Hotkey will work immediately in GNOME"
+                else
+                    log_warning "Hotkey created but failed to activate"
+                fi
+            else
+                # Add to existing keybindings if not already present
+                if [[ "$CURRENT_KEYBINDINGS" != *"$KEYBINDING_PATH"* ]]; then
+                    NEW_KEYBINDINGS=$(echo "$CURRENT_KEYBINDINGS" | sed "s|]|, \"$KEYBINDING_PATH\"]|g")
+                    if gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$NEW_KEYBINDINGS" 2>/dev/null; then
+                        log_success "GNOME hotkey configured: Super+] → Speech-to-Text"
+                        log_info "Hotkey will work immediately in GNOME"
+                    else
+                        log_warning "Hotkey created but failed to activate"
+                    fi
+                else
+                    log_success "GNOME hotkey already configured: Super+] → Speech-to-Text"
+                fi
+            fi
+        else
+            log_error "Failed to configure hotkey settings"
+            log_info "Manually add shortcut: Settings > Keyboard > Custom Shortcuts"
+            log_info "Command: $SCRIPT_COMMAND"
+            log_info "Shortcut: Super+]"
+        fi
+    else
+        log_warning "Could not find available custom shortcut slot"
+        log_info "Manually add shortcut: Settings > Keyboard > Custom Shortcuts"
+        log_info "Command: $SCRIPT_COMMAND"
+        log_info "Shortcut: Super+]"
+    fi
+    
+elif [[ "$XDG_CURRENT_DESKTOP" == *"KDE"* ]] || [[ "$DESKTOP_SESSION" == *"kde"* ]]; then
+    log_info "KDE detected - hotkey setup requires manual configuration"
+    log_info "Go to: System Settings > Shortcuts > Custom Shortcuts"
+    log_info "Add: Super+] → $SCRIPT_COMMAND"
+    
+else
+    log_info "Desktop environment: $XDG_CURRENT_DESKTOP"
+    log_info "For global hotkeys, add this to your desktop environment:"
+    log_info "Command: $SCRIPT_COMMAND"
+    log_info "Shortcut: Super+]"
+fi
+
 # Final setup
 log_info "Final setup..."
 
-# Don't overwrite existing README.md as it was already updated
-if [ ! -f "README.md" ]; then
-cat > README.md << 'EOF'
-# Speech-to-Text with Deepgram Streaming API
-
-Real-time voice transcription into any text field in Ubuntu via hotkey (Super + Space)
-
-Features keyword detection (say "delete" to remove last transcription segment)
-
-## Quick Start
-
-1. **Set your API key:**
-   ```bash
-   export DEEPGRAM_API_KEY='your_api_key_here'
-   ```
-
-2. **Start the service:**
-   ```bash
-   ./run.sh
-   ```
-
-3. **Use hotkey:** Press `Super+Space` to start streaming, press again to stop and type
-   - Text is automatically typed to the active window in real-time
-
-4. **Single streaming session:**
-   ```bash
-   source venv/bin/activate
-   python speech_to_text.py -d 5  # Stream for 5 seconds
-   ```
-
-5. **Continuous streaming mode:**
-   ```bash
-   python speech_to_text.py -c  # Interactive streaming
-   ```
-
-## Files
-
-- `speech_to_text.py` - Main speech recognition script
-- `speech_hotkey.py` - System-wide hotkey service  
-- `run.sh` - Easy launcher
-- `test_installation.py` - Test your setup
-
-## Troubleshooting
-
-- Test installation: `python test_installation.py`
-- Check API key: `echo $DEEPGRAM_API_KEY`
-- Check audio: `pactl list sources short`
-
-## Why Deepgram Streaming API?
-
-- **Real-time:** Live streaming transcription with instant results
-- **Keywords:** Built-in support for detecting special commands like "delete"
-- **High accuracy:** Nova-2 model with smart formatting
-- **Low latency:** WebSocket-based streaming for minimal delay
-- **Flexible:** Supports both streaming and file-based transcription
-
-EOF
-fi
-
+# Display next steps
 echo ""
-log_success "Installation completed successfully!"
+echo "========================================="
+echo "🎉 Installation completed successfully!"
 echo ""
-echo "📁 Project directory: $PROJECT_DIR"
-echo "🐍 Python version: $($PYTHON_CMD --version)"
-echo "🌐 API: Deepgram Streaming API"
-echo "🖥️  Display server: $DISPLAY_SERVER"
-echo ""
-echo "🚀 Ready to use! Start with:"
-echo "   export DEEPGRAM_API_KEY='your_api_key_here'"
-echo "   cd $PROJECT_DIR && ./run.sh"
-echo "📱 Hotkey: Super+Space (Windows key + Space)"
+echo "Next steps:"
+echo "1. $(tput setaf 3)⚠️  IMPORTANT: Log out and back in (or reboot) for ydotool permissions to take effect!$(tput sgr0)"
+echo "2. DEEPGRAM_API_KEY='your_api_key_here' ./run.sh"
 echo ""
 
-if [[ "$DISPLAY_SERVER" == "wayland" ]] && ! groups "$USER" | grep -q input; then
-    log_warning "For Wayland support, log out and back in for group changes to take effect"
-fi
-
-# Offer to start immediately
-if [[ -n "$DEEPGRAM_API_KEY" ]]; then
-    read -p "Start the speech-to-text service now? (Y/n): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-        log_info "Starting service..."
-        ./run.sh
-    fi
-else
-    log_warning "Set DEEPGRAM_API_KEY first, then run ./run.sh"
-fi

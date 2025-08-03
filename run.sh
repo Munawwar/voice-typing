@@ -35,7 +35,7 @@ export DISPLAY=${DISPLAY:-:0}
 
 # Run the hotkey service
 echo -e "${GREEN}🎤 Starting Speech-to-Text Hotkey Service...${NC}"
-echo -e "${GREEN}📱 Press Super+Space to start streaming, press again to stop and transcribe${NC}"
+echo -e "${GREEN}📱 Press Super+] to start streaming, press again to stop and transcribe${NC}"
 echo -e "${YELLOW}🛑 Press Ctrl+C to quit${NC}"
 echo ""
 
