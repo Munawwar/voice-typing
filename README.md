@@ -79,8 +79,9 @@ This application works differently depending on your display server:
 - **Setup**: Automatic, no desktop environment configuration needed
 
 ### **Manual Usage (both)**
-- Run `python speech_to_text.py` directly for single recording sessions
-- Use `python speech_to_text.py -c` for continuous mode without hotkeys
+- First `source venv/bin/activate`
+- Then run `python speech_to_text.py` directly for single recording sessions
+- Or use `python speech_to_text.py -c` for continuous mode without hotkeys
 
 ## Troubleshooting
 
