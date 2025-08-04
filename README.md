@@ -1,18 +1,21 @@
-# Speech-to-Text with Deepgram Streaming API
+# Voice Typing with Deepgram Streaming API
 
-Real-time voice transcription into any text field in Ubuntu via hotkey (Super + ])
+Real-time voice transcription into any text field in Ubuntu via hotkey (Super + ]). Integrates with GNOME.
 
 ## Quick Start
 
 ```bash
-# First time run
+# First time install
 DEEPGRAM_API_KEY='your_api_key_here' ./install.sh
 
-# Future runs
+# Logout if ydotool was installed first time and for it to work with less delay
+
+# Press Super+ ] to start voice typing. press again to stop and type or say 'stop voice'
+
+
+# Or run manually
 DEEPGRAM_API_KEY='your_api_key_here' ./run.sh
 ```
-
-Press `Super+]` to start streaming transcription, press again to stop and type.
 
 ## Voice Commands
 
@@ -46,10 +49,9 @@ Text is automatically typed to the active window in real-time.
 ## Why Deepgram Streaming API?
 
 - Real-time: Live streaming transcription with instant results
-- Keywords: Built-in support for detecting special commands like "delete"
+- Keywords: Built-in support for detecting special commands like "undo"
 - High accuracy: Nova-3 model with smart formatting
 - Low latency: WebSocket-based streaming for minimal delay
-- Flexible: Supports both streaming and file-based transcription
 
 ## Code structure
 
