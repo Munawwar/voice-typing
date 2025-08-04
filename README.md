@@ -42,9 +42,9 @@ Text is automatically typed to the active window in real-time.
 
 2. **Continuous streaming mode:**
    ```bash
+   source venv/bin/activate
    python speech_to_text.py -c  # Interactive streaming mode
    ```
-
 
 ## Why Deepgram Streaming API?
 
@@ -52,13 +52,6 @@ Text is automatically typed to the active window in real-time.
 - Keywords: Built-in support for detecting special commands like "undo"
 - High accuracy: Nova-3 model with smart formatting
 - Low latency: WebSocket-based streaming for minimal delay
-
-## Code structure
-
-- `speech_to_text.py` - Main speech recognition script
-- `speech_hotkey.py` - System-wide hotkey service  
-- `run.sh` - Easy launcher
-- `test_installation.py` - Test your setup
 
 ## How it Works: Wayland vs X11
 
@@ -78,10 +71,12 @@ This application works differently depending on your display server:
 - **Pros**: Direct hotkey detection, works on any X11 desktop environment
 - **Setup**: Automatic, no desktop environment configuration needed
 
-### **Manual Usage (both)**
-- First `source venv/bin/activate`
-- Then run `python speech_to_text.py` directly for single recording sessions
-- Or use `python speech_to_text.py -c` for continuous mode without hotkeys
+## Code structure
+
+- `speech_to_text.py` - Main speech recognition script
+- `speech_hotkey.py` - System-wide hotkey service  
+- `run.sh` - Easy launcher
+- `test_installation.py` - Test your setup
 
 ## Troubleshooting
 
