@@ -1,0 +1,19 @@
+{
+  "//comment": "rename this file to config.json and add your Deepgram API key",
+  "deepgram_api_key": "your_deepgram_api_key_here",
+  "hotkey": "Super_R+bracketright",
+  "audio": {
+    "sample_rate": 16000,
+    "channels": 1,
+    "buffer_size": 1024
+  },
+  "transcription": {
+    "model": "nova-3",
+    "language": "en-US",
+    "smart_format": true,
+    "punctuate": true,
+    "profanity_filter": true,
+    "filler_words": true,
+    "mip_opt_out": true
+  }
+}
