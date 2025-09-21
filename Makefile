@@ -9,13 +9,13 @@ CONFIG_FILE=config.json
 # Build the binary
 build:
 	@echo "🔨 Building $(BINARY_NAME)..."
-	go build -o $(BINARY_NAME) .
+	go build -trimpath -ldflags="-buildid=" -o $(BINARY_NAME) .
 	@echo "✅ Build complete: ./$(BINARY_NAME)"
 
 # Build for release with optimizations
 release:
 	@echo "🚀 Building release version..."
-	CGO_ENABLED=1 go build -ldflags="-w -s" -o $(BINARY_NAME) .
+	CGO_ENABLED=1 go build -trimpath -ldflags="-w -s -buildid=" -o $(BINARY_NAME) .
 	@echo "✅ Release build complete: ./$(BINARY_NAME)"
 
 # Clean build artifacts
