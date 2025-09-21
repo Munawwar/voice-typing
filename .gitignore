@@ -1,4 +1,7 @@
 *.log
 
+# Build and distribution artifacts
+dist/
+
 # Configuration files with sensitive data
 config.json

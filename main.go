@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	VERSION   = "1.0.0"
+	VERSION   = "0.1.0"
 	LOCK_FILE = "/tmp/voice_recording.lock"
 )
 
