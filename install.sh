@@ -18,6 +18,27 @@ CONFIG_DIR="$HOME/.config/voice-typing"
 BINARY_NAME="voice-typing"
 HOTKEY_BINDING="<Super>bracketright"  # Super+]
 
+# Parse command line arguments
+FORCE_BUILD=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --build)
+            FORCE_BUILD=true
+            shift
+            ;;
+        --help|-h)
+            echo "Usage: $0 [--build]"
+            echo "  --build    Force building from source even if binary exists"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
 echo -e "${BLUE}🎤 Voice Typing Installer${NC}"
 echo "=================================="
 
@@ -99,9 +120,51 @@ install_dependencies() {
     fi
 }
 
-# Build the application
+# Build or verify the application binary
 build_application() {
-    print_info "Building Go application..."
+    # If --build flag is used, prefer building from source
+    if [[ "$FORCE_BUILD" == "true" ]]; then
+        if [[ ! -f "main.go" || ! -f "go.mod" ]]; then
+            print_error "--build flag used but no source code present"
+            print_error "Source files (main.go, go.mod) are required to build"
+            exit 1
+        fi
+        
+        print_info "Building Go application from source (--build flag)"
+        
+        if ! command -v go >/dev/null 2>&1; then
+            print_error "Go is not installed. Please install Go 1.19+ first:"
+            echo "  https://golang.org/doc/install"
+            exit 1
+        fi
+        
+        # Build the application
+        make build
+        
+        if [[ ! -f "./$BINARY_NAME" ]]; then
+            print_error "Build failed - binary not found"
+            exit 1
+        fi
+        
+        print_status "Application built successfully from source"
+        return 0
+    fi
+    
+    # Default behavior: prefer pre-built binary
+    if [[ -f "./$BINARY_NAME" ]]; then
+        print_status "Using pre-built binary: $BINARY_NAME"
+        return 0
+    fi
+    
+    # Fallback: build from source if available
+    if [[ ! -f "main.go" || ! -f "go.mod" ]]; then
+        print_error "No pre-built binary found and no source code present"
+        print_error "This appears to be an incomplete distribution"
+        print_error "Please download the complete package or a pre-built binary"
+        exit 1
+    fi
+    
+    print_info "Building Go application from source..."
     
     if ! command -v go >/dev/null 2>&1; then
         print_error "Go is not installed. Please install Go 1.19+ first:"
@@ -117,7 +180,7 @@ build_application() {
         exit 1
     fi
     
-    print_status "Application built successfully"
+    print_status "Application built successfully from source"
 }
 
 # Install binary and config
@@ -176,10 +239,7 @@ detect_desktop() {
 setup_gnome_hotkey() {
     print_info "Setting up GNOME hotkey (Super+])..."
     
-    # Create wrapper script for proper environment
-    create_hotkey_wrapper
-    
-    local cmd="$INSTALL_DIR/voice-typing-hotkey"
+    local cmd="$INSTALL_DIR/$BINARY_NAME --hotkey"
     local name="Voice Typing"
     local binding="<Super>bracketright"
     
