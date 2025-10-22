@@ -81,12 +81,12 @@ The stop hotkey sends a **SIGUSR1** signal for graceful shutdown, ensuring prope
 
 ## Voice Commands
 
+- **"stop recording"** or **"stop voice"**: Stop transcription
 - **"undo that"**: Remove the last transcribed phrase
+- **"new para"** or **"next para"**: Insert paragraph break
 - **"undo word"**: Remove the last word
 - **"undo last 3 words"**: Remove multiple words
 - **"newline"** or **"new line"**: Insert line break
-- **"new paragraph"** or **"next para"**: Insert paragraph break
-- **"stop voice"** or **"end recording"**: Stop transcription
 
 
 ## Configuration Options
