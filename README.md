@@ -6,6 +6,7 @@ Linux real-time voice typing tool using Deepgram's streaming API. Works on both 
 
 - **Real-time transcription**: Text appears immediately as you speak
 - **Voice commands**: "undo that", "newline", "new paragraph", "stop voice"
+- **Graceful stop hotkey**: Stop recording with a separate hotkey (no force kill)
 - **Fallback text injection**: Direct typing → Clipboard paste → Silent mode
 - **Single binary**: Not too many dependencies (Great to bind it to keyboard hotkey)
 - **Desktop integration**: GNOME/Unity hotkey integrated during install
@@ -67,6 +68,13 @@ Set up a desktop hotkey (Super+]) that runs:
 /path/to/voice-typing --hotkey
 ```
 
+Optionally, set up a **stop hotkey** (Super+[) for graceful stopping:
+```bash
+/path/to/voice-typing --stopkey
+```
+
+The stop hotkey sends a **SIGUSR1** signal for graceful shutdown, ensuring proper cleanup of audio streams, WebSocket connections, and temporary files. This is more elegant than the toggle hotkey which uses SIGTERM.
+
 **GNOME**: Settings → Keyboard → Custom Shortcuts
 **KDE**: System Settings → Shortcuts → Custom Shortcuts
 
@@ -87,6 +95,7 @@ Set up a desktop hotkey (Super+]) that runs:
 {
   "deepgram_api_key": "your_key",
   "hotkey": "Super_R+bracketright",
+  "stop_hotkey": "Super_R+bracketleft",
   "audio": {
     "sample_rate": 16000,
     "channels": 1,
@@ -99,7 +108,7 @@ Set up a desktop hotkey (Super+]) that runs:
     "punctuate": true,
     "profanity_filter": true,
     "filler_words": true,
-    "mip_opt_out: true
+    "mip_opt_out": true
   }
 }
 ```

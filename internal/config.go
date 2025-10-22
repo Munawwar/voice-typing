@@ -19,6 +19,7 @@ type TranscriptionConfig struct {
 type Config struct {
 	DeepgramAPIKey string              `json:"deepgram_api_key"`
 	Hotkey         string              `json:"hotkey"`
+	StopHotkey     string              `json:"stop_hotkey"`
 	Audio          AudioConfig         `json:"audio"`
 	Transcription  TranscriptionConfig `json:"transcription"`
 }

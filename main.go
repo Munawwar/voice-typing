@@ -37,6 +37,7 @@ func main() {
 		configPath = flag.String("config", "", "Path to configuration file")
 		version    = flag.Bool("version", false, "Show version information")
 		hotkey     = flag.Bool("hotkey", false, "Single hotkey toggle mode")
+		stopkey    = flag.Bool("stopkey", false, "Gracefully stop active recording")
 		service    = flag.Bool("service", false, "Run as persistent service")
 	)
 	flag.Parse()
@@ -73,20 +74,31 @@ func main() {
 	}
 	log.Printf("Config loaded successfully")
 
-	// Kill existing instances to prevent conflicts
-	if err := killExistingInstances(); err != nil {
-		log.Printf("Warning: %v", err)
-	}
+	log.Printf("Mode detection - hotkey: %v, stopkey: %v, service: %v", *hotkey, *stopkey, *service)
 
-	log.Printf("Mode detection - hotkey: %v, service: %v", *hotkey, *service)
-
-	if *hotkey {
+	if *stopkey {
+		// Don't kill existing instances when we're just sending a stop signal
+		log.Println("Stop key pressed - requesting graceful stop")
+		handleGracefulStop()
+	} else if *hotkey {
+		// Kill existing instances to prevent conflicts (only for hotkey/recording modes)
+		if err := killExistingInstances(); err != nil {
+			log.Printf("Warning: %v", err)
+		}
 		log.Println("Hotkey mode - performing single toggle")
 		handleHotkeyToggle(cfg)
 	} else if *service {
+		// Kill existing instances to prevent conflicts
+		if err := killExistingInstances(); err != nil {
+			log.Printf("Warning: %v", err)
+		}
 		log.Println("Starting persistent service mode")
 		runPersistentService(cfg)
 	} else {
+		// Kill existing instances to prevent conflicts
+		if err := killExistingInstances(); err != nil {
+			log.Printf("Warning: %v", err)
+		}
 		// Default: single recording session
 		log.Println("Starting single recording session")
 		runSingleSession(cfg)
@@ -154,25 +166,53 @@ func handleHotkeyToggle(cfg *internal.Config) {
 	startHotkeyRecording(cfg)
 }
 
+func handleGracefulStop() {
+	// Check if there's an active recording
+	data, err := os.ReadFile(LOCK_FILE)
+	if err != nil {
+		log.Println("No active recording found")
+		showNotification("Voice Typing", "No active recording to stop", "dialog-information")
+		return
+	}
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		log.Printf("Invalid PID in lock file: %v", err)
+		os.Remove(LOCK_FILE)
+		showNotification("Voice Typing Error", "Invalid lock file", "dialog-error")
+		return
+	}
+
+	// Send SIGUSR1 for graceful stop
+	log.Printf("Sending graceful stop signal (SIGUSR1) to PID %d", pid)
+	if err := syscall.Kill(pid, syscall.SIGUSR1); err != nil {
+		log.Printf("Error sending stop signal to process %d: %v", pid, err)
+		showNotification("Voice Typing Error", "Failed to send stop signal", "dialog-error")
+		return
+	}
+
+	// showNotification("Voice Typing", "Stopping recording gracefully...", "audio-input-microphone-muted")
+}
+
 func stopExistingRecording() {
 	data, err := os.ReadFile(LOCK_FILE)
 	if err != nil {
-		log.Printf("⚠️ Error reading lock file: %v", err)
+		log.Printf("Error reading lock file: %v", err)
 		os.Remove(LOCK_FILE)
 		return
 	}
 
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
-		log.Printf("⚠️ Invalid PID in lock file: %v", err)
+		log.Printf("Invalid PID in lock file: %v", err)
 		os.Remove(LOCK_FILE)
 		return
 	}
 
-	log.Println("🛑 Stopping active voice recording...")
+	log.Println("Stopping active voice recording...")
 
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
-		log.Printf("⚠️ Error stopping process %d: %v", pid, err)
+		log.Printf("Error stopping process %d: %v", pid, err)
 	} else {
 		showNotification("Voice Typing Stopped", "Recording interrupted by hotkey.", "audio-input-microphone-muted")
 	}
@@ -184,7 +224,7 @@ func stopExistingRecording() {
 func startHotkeyRecording(cfg *internal.Config) {
 	// Create lock file
 	if err := os.WriteFile(LOCK_FILE, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
-		log.Printf("⚠️ Warning: Could not create lock file: %v", err)
+		log.Printf("Warning: Could not create lock file: %v", err)
 	}
 	defer os.Remove(LOCK_FILE)
 
@@ -203,12 +243,22 @@ func runSingleSession(cfg *internal.Config) {
 	defer cancel()
 
 	// Setup signal handling
+	// SIGTERM: Force stop (from toggle hotkey)
+	// SIGUSR1: Graceful stop (from stop hotkey)
+	// SIGINT: Ctrl+C (graceful stop)
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGUSR1)
 
 	go func() {
-		<-sigChan
-		log.Println("\nReceived shutdown signal")
+		sig := <-sigChan
+		switch sig {
+		case syscall.SIGUSR1:
+			log.Println("\nReceived graceful stop signal (SIGUSR1)")
+		case syscall.SIGTERM:
+			log.Println("\nReceived force stop signal (SIGTERM)")
+		case os.Interrupt:
+			log.Println("\nReceived interrupt signal (Ctrl+C)")
+		}
 		cancel()
 	}()
 
@@ -303,8 +353,8 @@ func (s *SpeechService) StartRecording(ctx context.Context, realTimeTyping bool)
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("⏹️ Stopping due to context cancellation")
-			showNotification("Voice Typing Stopped", "Recording cancelled.", "audio-input-microphone-muted")
+			log.Println("Stopping due to context cancellation (signal received)")
+			showNotification("Voice Typing Stopped", "Recording stopped.", "audio-input-microphone-muted")
 			return nil
 		case err := <-streamErr:
 			if err != nil {
@@ -313,7 +363,7 @@ func (s *SpeechService) StartRecording(ctx context.Context, realTimeTyping bool)
 			return nil
 		case <-ticker.C:
 			if s.deepgram.IsStopRequested() {
-				log.Println("⏹️ Stopping due to voice command")
+				log.Println("Stopping due to voice command")
 				showNotification("Voice Typing Stopped", "Recording ended by voice command.", "audio-input-microphone-muted")
 				return nil
 			}
@@ -325,6 +375,6 @@ func showNotification(title, message, icon string) {
 	cmd := exec.Command("notify-send", title, message, "--icon="+icon, "--expire-time=3000")
 	if err := cmd.Run(); err != nil {
 		// Notifications are optional, don't fail if they don't work
-		log.Printf("⚠️ Notification failed: %v", err)
+		log.Printf("Notification failed: %v", err)
 	}
 }

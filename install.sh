@@ -3,8 +3,6 @@
 # Voice Typing Installation Script
 # Supports Ubuntu/Debian with GNOME/Unity desktop environments
 
-set -e
-
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -84,8 +82,13 @@ install_dependencies() {
     # Check if we need sudo
     if command -v apt >/dev/null 2>&1; then
         # Audio dependencies
-        sudo apt update
-        sudo apt install -y portaudio19-dev
+        if ! sudo apt update; then
+            print_warning "Failed to update package list, continuing anyway"
+        fi
+        if ! sudo apt install -y portaudio19-dev; then
+            print_error "Failed to install portaudio19-dev - audio capture may not work"
+            print_info "You may need to install it manually later"
+        fi
         
         # Typing tools for Wayland/X11
         if [[ "$XDG_SESSION_TYPE" == "wayland" ]]; then
@@ -139,7 +142,10 @@ build_application() {
         fi
         
         # Build the application
-        make build
+        if ! make build; then
+            print_error "Build failed"
+            exit 1
+        fi
         
         if [[ ! -f "./$BINARY_NAME" ]]; then
             print_error "Build failed - binary not found"
@@ -173,7 +179,10 @@ build_application() {
     fi
     
     # Build the application
-    make build
+    if ! make build; then
+        print_error "Build failed"
+        exit 1
+    fi
     
     if [[ ! -f "./$BINARY_NAME" ]]; then
         print_error "Build failed - binary not found"
@@ -188,19 +197,37 @@ install_files() {
     print_info "Installing files..."
     
     # Create directories
-    mkdir -p "$INSTALL_DIR"
-    mkdir -p "$CONFIG_DIR"
+    if ! mkdir -p "$INSTALL_DIR"; then
+        print_error "Failed to create install directory: $INSTALL_DIR"
+        exit 1
+    fi
+    if ! mkdir -p "$CONFIG_DIR"; then
+        print_error "Failed to create config directory: $CONFIG_DIR"
+        exit 1
+    fi
     
     # Install binary
-    cp "./$BINARY_NAME" "$INSTALL_DIR/"
-    chmod +x "$INSTALL_DIR/$BINARY_NAME"
+    if ! cp "./$BINARY_NAME" "$INSTALL_DIR/"; then
+        print_error "Failed to copy binary to $INSTALL_DIR"
+        exit 1
+    fi
+    if ! chmod +x "$INSTALL_DIR/$BINARY_NAME"; then
+        print_error "Failed to make binary executable"
+        exit 1
+    fi
     
     # Install config if it doesn't exist
     if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
         if [[ -f "config.json" ]]; then
-            cp "config.json" "$CONFIG_DIR/"
+            if ! cp "config.json" "$CONFIG_DIR/"; then
+                print_error "Failed to copy config.json"
+                exit 1
+            fi
         else
-            cp "config.example.json" "$CONFIG_DIR/config.json"
+            if ! cp "config.example.json" "$CONFIG_DIR/config.json"; then
+                print_error "Failed to copy config.example.json"
+                exit 1
+            fi
             print_warning "Please edit $CONFIG_DIR/config.json with your Deepgram API key"
         fi
     else
@@ -235,21 +262,32 @@ detect_desktop() {
     fi
 }
 
-# Setup GNOME hotkey
+# Setup GNOME hotkeys
 setup_gnome_hotkey() {
-    print_info "Setting up GNOME hotkey (Super+])..."
+    print_info "Setting up GNOME hotkeys..."
     
-    local cmd="$INSTALL_DIR/$BINARY_NAME --hotkey"
-    local name="Voice Typing"
-    local binding="<Super>bracketright"
+    # Setup start/toggle hotkey (Super+])
+    setup_gnome_keybinding "Voice Typing" "$INSTALL_DIR/$BINARY_NAME --hotkey" "<Super>bracketright"
+    
+    # Setup stop hotkey (Super+[)
+    setup_gnome_keybinding "Voice Typing Stop" "$INSTALL_DIR/$BINARY_NAME --stopkey" "<Super>bracketleft"
+}
+
+# Helper function to setup a single GNOME keybinding
+setup_gnome_keybinding() {
+    local name="$1"
+    local cmd="$2"
+    local binding="$3"
     
     # Find available custom keybinding slot
     local slot=0
     while true; do
         local slot_name=$(gsettings get "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom$slot/" name 2>/dev/null || echo "''")
-        if [[ "$slot_name" == "''" || "$slot_name" == "" ]]; then
+        
+        if [[ "$slot_name" == "''" || "$slot_name" == "" || "$slot_name" == "@ms nothing" ]]; then
             break  # Found empty slot
         fi
+        
         ((slot++))
         if [[ $slot -gt 20 ]]; then
             print_error "Too many custom keybindings, cannot add more"
@@ -259,38 +297,55 @@ setup_gnome_hotkey() {
     
     local key_path="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom$slot/"
     
-    print_info "Using keybinding slot: custom$slot"
-    
     # Set the keybinding properties
-    gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$key_path" name "$name"
-    gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$key_path" command "$cmd"
-    gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$key_path" binding "$binding"
+    if ! gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$key_path" name "$name" 2>/dev/null; then
+        print_error "Failed to set keybinding name"
+        return 1
+    fi
+    if ! gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$key_path" command "$cmd" 2>/dev/null; then
+        print_error "Failed to set keybinding command"
+        return 1
+    fi
+    if ! gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$key_path" binding "$binding" 2>/dev/null; then
+        print_error "Failed to set keybinding shortcut"
+        return 1
+    fi
     
     # Get current keybindings list
     local existing_bindings=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings 2>/dev/null || echo "@as []")
     
     # Add to the list of custom keybindings
     if [[ "$existing_bindings" == "[]" || "$existing_bindings" == "@as []" ]]; then
-        gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['$key_path']"
-        print_info "Created new keybindings list"
-    else
-        # Parse existing bindings and add our new one
-        local clean_bindings=$(echo "$existing_bindings" | sed "s/@as //g" | sed "s/\[//g" | sed "s/\]//g" | sed "s/'//g")
-        if [[ -n "$clean_bindings" ]]; then
-            gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['$key_path', $(echo "$existing_bindings" | sed 's/@as \[\(.*\)\]/\1/')]"
-        else
-            gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['$key_path']"
+        if ! gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['$key_path']" 2>/dev/null; then
+            print_error "Failed to set custom keybindings list"
+            return 1
         fi
-        print_info "Added to existing keybindings list"
+    else
+        # Extract just the content inside the brackets, then split into individual items
+        local existing_items=$(echo "$existing_bindings" | sed 's/@as //g' | sed 's/^\[//g' | sed 's/\]$//g')
+        
+        # Build new list by appending to existing items
+        if [[ -n "$existing_items" ]]; then
+            if ! gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['$key_path', $existing_items]" 2>/dev/null; then
+                print_error "Failed to update custom keybindings list"
+                return 1
+            fi
+        else
+            if ! gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['$key_path']" 2>/dev/null; then
+                print_error "Failed to set custom keybindings list"
+                return 1
+            fi
+        fi
     fi
     
     # Verify the setup
-    sleep 1
+    sleep 0.5
     local verify_name=$(gsettings get "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$key_path" name 2>/dev/null || echo "")
-    if [[ "$verify_name" =~ Voice.Typing ]]; then
-        print_status "GNOME hotkey configured successfully: Super+] → Voice Typing"
+    
+    if [[ "$verify_name" =~ $name ]]; then
+        print_status "Configured: $binding → $name"
     else
-        print_warning "Hotkey setup may have failed - please check Settings → Keyboard → Shortcuts"
+        print_warning "Setup may have failed for '$name'"
     fi
 }
 
@@ -332,10 +387,15 @@ setup_hotkey() {
 show_manual_hotkey_instructions() {
     print_info "Manual hotkey setup instructions:"
     echo
-    echo "Command to run: $INSTALL_DIR/$BINARY_NAME --hotkey"
-    echo "Suggested hotkey: Super+] (Windows key + right bracket)"
+    echo "Start/Toggle Recording:"
+    echo "  Command: $INSTALL_DIR/$BINARY_NAME --hotkey"
+    echo "  Suggested hotkey: Super+] (Windows key + right bracket)"
     echo
-    echo "Set this up in your desktop environment's keyboard shortcuts settings."
+    echo "Stop Recording (graceful):"
+    echo "  Command: $INSTALL_DIR/$BINARY_NAME --stopkey"
+    echo "  Suggested hotkey: Super+[ (Windows key + left bracket)"
+    echo
+    echo "Set these up in your desktop environment's keyboard shortcuts settings."
 }
 
 show_kde_instructions() {
@@ -343,25 +403,39 @@ show_kde_instructions() {
     print_info "KDE Plasma hotkey setup:"
     echo "1. Open System Settings → Shortcuts → Custom Shortcuts"
     echo "2. Click 'Edit' → 'New' → 'Global Shortcut' → 'Command/URL'"
-    echo "3. Set name: 'Voice Typing'"
-    echo "4. Set command: $INSTALL_DIR/$BINARY_NAME --hotkey"
-    echo "5. Set shortcut: Meta+]"
+    echo
+    echo "For Start/Toggle (Super+]):"
+    echo "  - Name: 'Voice Typing'"
+    echo "  - Command: $INSTALL_DIR/$BINARY_NAME --hotkey"
+    echo "  - Shortcut: Meta+]"
+    echo
+    echo "For Stop (Super+[):"
+    echo "  - Name: 'Voice Typing Stop'"
+    echo "  - Command: $INSTALL_DIR/$BINARY_NAME --stopkey"
+    echo "  - Shortcut: Meta+["
 }
 
 show_xfce_instructions() {
     echo
     print_info "XFCE hotkey setup:"
     echo "1. Open Settings → Keyboard → Application Shortcuts"
-    echo "2. Click 'Add'"
-    echo "3. Set command: $INSTALL_DIR/$BINARY_NAME --hotkey"
-    echo "4. Set shortcut: Super+]"
+    echo "2. Click 'Add' for each command:"
+    echo
+    echo "Start/Toggle (Super+]):"
+    echo "  - Command: $INSTALL_DIR/$BINARY_NAME --hotkey"
+    echo "  - Shortcut: Super+]"
+    echo
+    echo "Stop (Super+[):"
+    echo "  - Command: $INSTALL_DIR/$BINARY_NAME --stopkey"
+    echo "  - Shortcut: Super+["
 }
 
 show_hyprland_instructions() {
     echo
     print_info "Hyprland hotkey setup:"
-    echo "Add this line to your ~/.config/hypr/hyprland.conf:"
+    echo "Add these lines to your ~/.config/hypr/hyprland.conf:"
     echo "bind = SUPER, bracketright, exec, $INSTALL_DIR/$BINARY_NAME --hotkey"
+    echo "bind = SUPER, bracketleft, exec, $INSTALL_DIR/$BINARY_NAME --stopkey"
     echo "Then reload Hyprland config"
 }
 
@@ -427,7 +501,8 @@ main() {
     echo
     print_info "Usage:"
     echo "  • Single session: $BINARY_NAME"
-    echo "  • Hotkey toggle: Press Super+] (or your configured hotkey)"
+    echo "  • Start/Toggle: Press Super+] (or your configured hotkey)"
+    echo "  • Stop (graceful): Press Super+[ (or your configured stop hotkey)"
     echo "  • Config file: $CONFIG_DIR/config.json"
     echo
     print_info "Voice commands:"

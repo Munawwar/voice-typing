@@ -2,6 +2,7 @@
   "//comment": "rename this file to config.json and add your Deepgram API key",
   "deepgram_api_key": "your_deepgram_api_key_here",
   "hotkey": "Super_R+bracketright",
+  "stop_hotkey": "Super_R+bracketleft",
   "audio": {
     "sample_rate": 16000,
     "channels": 1,
