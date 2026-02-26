@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+var commandSanitizeRegex = regexp.MustCompile(`[^a-z0-9\s]+`)
+
 type TranscriptionStack struct {
 	phrases      []string
 	concatenated string
@@ -35,9 +37,9 @@ func (ts *TranscriptionStack) AddPhrase(phrase string, realTimeTyping bool) {
 		ts.phrases = append(ts.phrases, *processedPhrase)
 		if realTimeTyping {
 			if *processedPhrase == "\n" {
-				ts.textInjector.TypeNewline()
+				_ = ts.textInjector.TypeNewline()
 			} else {
-				ts.textInjector.TypeParagraphBreak()
+				_ = ts.textInjector.TypeParagraphBreak()
 			}
 		}
 		return // Don't add spacing logic for line breaks
@@ -59,34 +61,34 @@ func (ts *TranscriptionStack) AddPhrase(phrase string, realTimeTyping bool) {
 	ts.lastSentence = *processedPhrase
 
 	if realTimeTyping {
-		ts.textInjector.TypeText(textWithSpacing)
+		_ = ts.textInjector.TypeText(textWithSpacing)
 	}
 }
 
 func (ts *TranscriptionStack) processVoiceCommands(sentence string, realTimeTyping bool) *string {
-	sentenceLower := strings.ToLower(strings.TrimSpace(sentence))
+	sentenceLower := normalizeCommandText(sentence)
 
-	// Check for undo command
-	if ts.containsKeywords(sentenceLower, []string{"undo that"}) {
-		ts.handleUndoCommand(realTimeTyping)
-		return nil
-	}
-
-	// Check for undo words commands
+	// Check for undo words commands first so generic "undo" doesn't swallow it.
 	if ts.isUndoWordsCommand(sentenceLower) {
 		wordCount := ts.extractWordCountFromUndo(sentenceLower)
 		ts.handleUndoWordsCommand(wordCount, realTimeTyping)
 		return nil
 	}
 
+	// Check for undo command
+	if ts.containsKeywords(sentenceLower, []string{"undo that", "undo this", "undo", "delete that", "delete this"}) {
+		ts.handleUndoCommand(realTimeTyping)
+		return nil
+	}
+
 	// Check for newline command
-	if ts.containsKeywords(sentenceLower, []string{"newline", "new line"}) {
+	if ts.containsKeywords(sentenceLower, []string{"newline", "new line", "next line", "line break"}) {
 		result := "\n"
 		return &result
 	}
 
 	// Check for paragraph command
-	if ts.containsKeywords(sentenceLower, []string{"next para", "new para", "next paragraph", "new paragraph"}) {
+	if ts.containsKeywords(sentenceLower, []string{"next para", "new para", "next paragraph", "new paragraph", "paragraph break"}) {
 		result := "\n\n"
 		return &result
 	}
@@ -102,12 +104,24 @@ func (ts *TranscriptionStack) processVoiceCommands(sentence string, realTimeTypi
 }
 
 func (ts *TranscriptionStack) containsKeywords(text string, keywords []string) bool {
+	paddedText := " " + text + " "
 	for _, keyword := range keywords {
-		if strings.Contains(text, keyword) {
+		normalizedKeyword := normalizeCommandText(keyword)
+		if normalizedKeyword == "" {
+			continue
+		}
+		if strings.Contains(paddedText, " "+normalizedKeyword+" ") {
 			return true
 		}
 	}
 	return false
+}
+
+func normalizeCommandText(text string) string {
+	lowered := strings.ToLower(strings.TrimSpace(text))
+	lowered = strings.ReplaceAll(lowered, "-", " ")
+	lowered = commandSanitizeRegex.ReplaceAllString(lowered, " ")
+	return strings.Join(strings.Fields(lowered), " ")
 }
 
 func (ts *TranscriptionStack) handleUndoCommand(realTimeTyping bool) {
@@ -120,12 +134,12 @@ func (ts *TranscriptionStack) handleUndoCommand(realTimeTyping bool) {
 
 	if realTimeTyping {
 		if removed == "\n" {
-			ts.textInjector.TypeKeyCombo([]string{"BackSpace"})
+			_ = ts.textInjector.TypeKeyCombo([]string{"BackSpace"})
 		} else if removed == "\n\n" {
-			ts.textInjector.TypeKeyCombo([]string{"BackSpace"})
-			ts.textInjector.TypeKeyCombo([]string{"BackSpace"})
+			_ = ts.textInjector.TypeKeyCombo([]string{"BackSpace"})
+			_ = ts.textInjector.TypeKeyCombo([]string{"BackSpace"})
 		} else {
-			ts.textInjector.TypeBackspaces(len(removed))
+			_ = ts.textInjector.TypeBackspaces(len(removed))
 		}
 	}
 
@@ -222,7 +236,7 @@ func (ts *TranscriptionStack) handleUndoWordsCommand(wordCount int, realTimeTypi
 	// Handle real-time typing
 	if realTimeTyping {
 		// Use precise character backspacing instead of word selection
-		ts.textInjector.TypeBackspaces(charactersToBackspace)
+		_ = ts.textInjector.TypeBackspaces(charactersToBackspace)
 	}
 
 	// Rebuild concatenated string

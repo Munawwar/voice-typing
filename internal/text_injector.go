@@ -44,7 +44,7 @@ func detectDisplayServer() string {
 }
 
 func (ti *TextInjector) detectAvailableTools() {
-	tools := []string{"xdotool", "ydotool", "wtype", "wl-copy", "xclip", "xsel"}
+	tools := []string{"xdotool", "ydotool", "wtype", "wl-copy", "wl-paste", "xclip", "xsel"}
 
 	for _, tool := range tools {
 		if _, err := exec.LookPath(tool); err == nil {
@@ -52,7 +52,6 @@ func (ti *TextInjector) detectAvailableTools() {
 		}
 	}
 
-	log.Printf("Available tools: %v (Display server: %s)", ti.getAvailableToolsList(), ti.displayServer)
 }
 
 func (ti *TextInjector) getAvailableToolsList() []string {
@@ -95,6 +94,7 @@ func (ti *TextInjector) tryDirectTyping(text string) error {
 		tools = []string{"xdotool", "wtype", "ydotool"}
 	}
 
+	var lastErr error
 	for _, tool := range tools {
 		if !ti.availableTools[tool] {
 			continue
@@ -107,24 +107,29 @@ func (ti *TextInjector) tryDirectTyping(text string) error {
 		case "wtype":
 			cmd = exec.Command("wtype", text)
 		case "ydotool":
-			cmd = exec.Command("ydotool", "type", text)
+			// `--` avoids text beginning with `-` being parsed as a flag.
+			cmd = exec.Command("ydotool", "type", "--", text)
 		}
 
 		if err := cmd.Run(); err == nil {
-			log.Printf("✅ Typed via %s: %s", tool, text)
 			return nil
+		} else {
+			lastErr = err
 		}
 	}
 
+	if lastErr != nil {
+		return fmt.Errorf("direct typing failed: %w", lastErr)
+	}
 	return fmt.Errorf("direct typing failed")
 }
 
 func (ti *TextInjector) tryClipboardPaste(text string) error {
 	// Save current clipboard content
-	originalClip, _ := clipboard.ReadAll()
+	originalClip, _ := ti.readClipboard()
 
 	// Set text to clipboard
-	if err := clipboard.WriteAll(text); err != nil {
+	if err := ti.writeClipboard(text); err != nil {
 		return fmt.Errorf("failed to write to clipboard: %w", err)
 	}
 
@@ -134,11 +139,12 @@ func (ti *TextInjector) tryClipboardPaste(text string) error {
 	// Restore original clipboard content
 	time.Sleep(100 * time.Millisecond) // Give paste time to complete
 	if originalClip != "" {
-		clipboard.WriteAll(originalClip)
+		_ = ti.writeClipboard(originalClip)
+	} else {
+		_ = ti.clearClipboard()
 	}
 
 	if pasteErr == nil {
-		log.Printf("✅ Pasted via clipboard: %s", text)
 		return nil
 	}
 
@@ -154,6 +160,7 @@ func (ti *TextInjector) TypeKeyCombo(keys []string) error {
 		tools = []string{"xdotool", "ydotool", "wtype"}
 	}
 
+	var lastErr error
 	for _, tool := range tools {
 		if !ti.availableTools[tool] {
 			continue
@@ -161,9 +168,14 @@ func (ti *TextInjector) TypeKeyCombo(keys []string) error {
 
 		if err := ti.executeKeyCombo(tool, keys); err == nil {
 			return nil
+		} else {
+			lastErr = err
 		}
 	}
 
+	if lastErr != nil {
+		return fmt.Errorf("key combo failed %v: %w", keys, lastErr)
+	}
 	return fmt.Errorf("key combo failed: %v", keys)
 }
 
@@ -176,8 +188,12 @@ func (ti *TextInjector) executeKeyCombo(tool string, keys []string) error {
 		cmd = exec.Command("xdotool", "key", strings.Join(mappedKeys, "+"))
 
 	case "ydotool":
-		mappedKeys := ti.mapKeysForYdotool(keys)
-		cmd = exec.Command("ydotool", "key", strings.Join(mappedKeys, "+"))
+		keycodeArgs, err := ti.buildYdotoolKeyArgs(keys)
+		if err != nil {
+			return fmt.Errorf("ydotool key mapping failed: %w", err)
+		}
+		cmdArgs := append([]string{"key"}, keycodeArgs...)
+		cmd = exec.Command("ydotool", cmdArgs...)
 
 	case "wtype":
 		// wtype has limited key combo support
@@ -220,25 +236,46 @@ func (ti *TextInjector) mapKeysForXdotool(keys []string) []string {
 	return mapped
 }
 
-func (ti *TextInjector) mapKeysForYdotool(keys []string) []string {
-	keyMap := map[string]string{
-		"BackSpace": "Backspace",
-		"Return":    "enter",
-		"shift":     "shift",
-		"ctrl":      "ctrl",
-		"Left":      "left",
-		"v":         "v",
+func (ti *TextInjector) buildYdotoolKeyArgs(keys []string) ([]string, error) {
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("empty key combo")
 	}
 
-	mapped := make([]string, len(keys))
+	keycodes := make([]int, len(keys))
 	for i, key := range keys {
-		if mappedKey, ok := keyMap[key]; ok {
-			mapped[i] = mappedKey
-		} else {
-			mapped[i] = key
+		code, err := ti.mapKeyToYdotoolKeycode(key)
+		if err != nil {
+			return nil, err
 		}
+		keycodes[i] = code
 	}
-	return mapped
+
+	// ydotool key expects Linux input keycodes with press/release states.
+	args := make([]string, 0, len(keys)*2)
+	for _, code := range keycodes {
+		args = append(args, fmt.Sprintf("%d:1", code))
+	}
+	for i := len(keycodes) - 1; i >= 0; i-- {
+		args = append(args, fmt.Sprintf("%d:0", keycodes[i]))
+	}
+	return args, nil
+}
+
+func (ti *TextInjector) mapKeyToYdotoolKeycode(key string) (int, error) {
+	keycodeMap := map[string]int{
+		"BackSpace": 14,
+		"Return":    28,
+		"ctrl":      29,
+		"v":         47,
+		"shift":     42,
+		"Left":      105,
+	}
+
+	if code, ok := keycodeMap[key]; ok {
+		return code, nil
+	}
+
+	return 0, fmt.Errorf("unsupported ydotool key: %s", key)
 }
 
 func (ti *TextInjector) mapKeyForWtype(key string) string {
@@ -254,8 +291,41 @@ func (ti *TextInjector) mapKeyForWtype(key string) string {
 	return ""
 }
 
+func (ti *TextInjector) readClipboard() (string, error) {
+	if ti.displayServer == "wayland" && ti.availableTools["wl-paste"] {
+		cmd := exec.Command("wl-paste", "--no-newline")
+		out, err := cmd.Output()
+		if err != nil {
+			return "", err
+		}
+		return string(out), nil
+	}
+	return clipboard.ReadAll()
+}
+
+func (ti *TextInjector) writeClipboard(text string) error {
+	if ti.displayServer == "wayland" && ti.availableTools["wl-copy"] {
+		cmd := exec.Command("wl-copy")
+		cmd.Stdin = strings.NewReader(text)
+		return cmd.Run()
+	}
+	return clipboard.WriteAll(text)
+}
+
+func (ti *TextInjector) clearClipboard() error {
+	if ti.displayServer == "wayland" && ti.availableTools["wl-copy"] {
+		return exec.Command("wl-copy", "--clear").Run()
+	}
+	return clipboard.WriteAll("")
+}
+
 func (ti *TextInjector) TypeNewline() error {
-	return ti.TypeKeyCombo([]string{"shift", "Return"})
+	// Shift+Enter is preferred for chat-style text fields.
+	// Fall back to Enter for editors/forms where that is the newline action.
+	if err := ti.TypeKeyCombo([]string{"shift", "Return"}); err == nil {
+		return nil
+	}
+	return ti.TypeKeyCombo([]string{"Return"})
 }
 
 func (ti *TextInjector) TypeParagraphBreak() error {

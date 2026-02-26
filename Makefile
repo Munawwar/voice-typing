@@ -77,7 +77,11 @@ check-deps:
 	@command -v xdotool >/dev/null 2>&1 || echo "⚠️  xdotool not found (install xdotool)"
 	@command -v wtype >/dev/null 2>&1 || echo "⚠️  wtype not found (install wtype for Wayland)"
 	@command -v ydotool >/dev/null 2>&1 || echo "⚠️  ydotool not found (install ydotool for Wayland)"
-	@systemctl --user is-active ydotoold >/dev/null 2>&1 || echo "⚠️  ydotoold service not running (systemctl --user enable --now ydotoold)"
+	@(systemctl --user is-active ydotoold >/dev/null 2>&1 || \
+	  systemctl --user is-active ydotool >/dev/null 2>&1 || \
+	  systemctl is-active ydotoold >/dev/null 2>&1 || \
+	  systemctl is-active ydotool >/dev/null 2>&1) || \
+	  echo "⚠️  ydotool daemon not running (try 'sudo systemctl enable --now ydotoold' or check a user unit)"
 	@echo "✅ Dependency check complete"
 
 # Show help

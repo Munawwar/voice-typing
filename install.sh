@@ -57,6 +57,98 @@ print_info() {
     echo -e "${BLUE}ℹ️  ${NC}$1"
 }
 
+# Configure a user-scoped ydotoold service so the socket lives at
+# /run/user/$UID/.ydotool_socket (the default ydotool client path).
+setup_ydotool_user_service() {
+    local ydotoold_bin
+    local user_systemd_dir="$HOME/.config/systemd/user"
+    local service_file="$user_systemd_dir/ydotoold.service"
+
+    ydotoold_bin="$(command -v ydotoold 2>/dev/null || true)"
+    if [[ -z "$ydotoold_bin" ]]; then
+        print_warning "ydotoold binary not found; cannot create user service"
+        return 1
+    fi
+
+    if ! mkdir -p "$user_systemd_dir"; then
+        print_warning "Failed to create $user_systemd_dir"
+        return 1
+    fi
+
+    cat > "$service_file" <<EOF
+[Unit]
+Description=ydotool daemon (user)
+
+[Service]
+ExecStart=$ydotoold_bin -p %t/.ydotool_socket -P 0600
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+
+    if ! systemctl --user daemon-reload >/dev/null 2>&1; then
+        print_warning "Could not reload user systemd daemon"
+        return 1
+    fi
+
+    if systemctl --user enable --now ydotoold >/dev/null 2>&1; then
+        print_status "Configured user ydotoold service ($service_file)"
+
+        # Warn if a system service is also running, since it can confuse debugging.
+        if systemctl is-active ydotoold >/dev/null 2>&1 || systemctl is-active ydotool >/dev/null 2>&1; then
+            print_warning "A system-level ydotool service is also active; user service will be used by default"
+        fi
+        return 0
+    fi
+
+    print_warning "Failed to start user ydotoold service"
+    return 1
+}
+
+setup_ydotool_daemon() {
+    print_info "Configuring ydotool daemon..."
+
+    # Prefer a user service so the socket is accessible to the current user.
+    if systemctl --user list-unit-files >/dev/null 2>&1; then
+        if systemctl --user list-unit-files 2>/dev/null | grep -q '^ydotoold\.service'; then
+            if systemctl --user enable --now ydotoold >/dev/null 2>&1; then
+                print_status "Enabled user ydotoold service"
+                return 0
+            fi
+        elif systemctl --user list-unit-files 2>/dev/null | grep -q '^ydotool\.service'; then
+            if systemctl --user enable --now ydotool >/dev/null 2>&1; then
+                print_status "Enabled user ydotool service"
+                return 0
+            fi
+        elif setup_ydotool_user_service; then
+            return 0
+        fi
+    else
+        print_warning "User systemd session unavailable; falling back to system service detection"
+    fi
+
+    # Fallback to packaged system units when user service setup isn't possible.
+    if systemctl list-unit-files 2>/dev/null | grep -q '^ydotoold\.service'; then
+        if sudo systemctl enable --now ydotoold; then
+            print_status "Enabled system ydotoold service"
+            return 0
+        fi
+        print_warning "Failed to enable/start system ydotoold service"
+        return 1
+    elif systemctl list-unit-files 2>/dev/null | grep -q '^ydotool\.service'; then
+        if sudo systemctl enable --now ydotool; then
+            print_status "Enabled system ydotool service"
+            return 0
+        fi
+        print_warning "Failed to enable/start system ydotool service"
+        return 1
+    fi
+
+    print_warning "No ydotool systemd unit found; start ydotoold manually if needed"
+    return 1
+}
+
 # Check if running on supported system
 check_system() {
     print_info "Checking system compatibility..."
@@ -95,11 +187,9 @@ install_dependencies() {
             print_info "Installing Wayland typing tools..."
             sudo apt install -y wtype ydotool wl-clipboard
             
-            # Enable ydotool daemon
-            if systemctl --user list-unit-files | grep -q ydotoold; then
-                systemctl --user enable --now ydotoold || true
-            else
-                sudo systemctl enable --now ydotoold || true
+            # Enable/configure ydotool daemon
+            if ! setup_ydotool_daemon; then
+                print_warning "ydotool daemon setup failed; typing fallbacks may not work until this is fixed"
             fi
             
             # Add user to input group for ydotool

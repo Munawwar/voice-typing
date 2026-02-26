@@ -151,7 +151,7 @@ You can find docs on the `transcription` configs at [deepgram's docs](https://de
 - For Wayland: Ensure ydotool daemon is running
 - Check display server: `echo $XDG_SESSION_TYPE`
 - Wayland specifics:
-  - Ensure `ydotoold` is active: `systemctl status ydotoold` (or `sudo systemctl enable --now ydotoold`)
+  - Ensure the ydotool daemon is active (user or system service): `systemctl --user status ydotoold` or `sudo systemctl status ydotoold` (some packages use `ydotool.service`)
   - Add user to `input` group and re-login: `sudo usermod -a -G input $USER`
   - `wtype` is best-effort; some DEs sandbox key injection. If `wtype` fails, `ydotool` should work once the daemon and group permissions are correct.
   - Clipboard fallback requires `wl-copy`; install with: `sudo apt install wl-clipboard`
