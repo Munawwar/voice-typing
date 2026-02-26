@@ -2,7 +2,7 @@
 
 # Build variables
 BINARY_NAME=voice-typing
-# Extract version from Go source code (e.g., VERSION = "0.1.0")
+# Extract version from Go source code (e.g., VERSION = "0.1.1")
 VERSION=$(shell grep 'VERSION.*=' main.go | cut -d'"' -f2)
 BUILD_DIR=build
 DIST_DIR=dist
