@@ -1,19 +1,14 @@
 #!/bin/bash
 
-# Voice Typing Uninstaller
+set -uo pipefail
 
-set -e
-
-# Colors
-RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Paths
 INSTALL_DIR="$HOME/.local/bin"
-CONFIG_DIR="$HOME/.config/voice-typing"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/voice-typing"
 BINARY_NAME="voice-typing"
 
 print_status() {
@@ -31,62 +26,61 @@ print_warning() {
 echo -e "${BLUE}🗑️ Voice Typing Uninstaller${NC}"
 echo "===================================="
 
-# Kill any running instances
-print_info "Stopping any running instances..."
-pkill -f "$BINARY_NAME" || true
-
-# Remove binary
-if [[ -f "$INSTALL_DIR/$BINARY_NAME" ]]; then
-    rm "$INSTALL_DIR/$BINARY_NAME"
-    print_status "Removed binary from $INSTALL_DIR"
+if [[ -x "$INSTALL_DIR/$BINARY_NAME" ]]; then
+    print_info "Stopping the active recording, if any..."
+    "$INSTALL_DIR/$BINARY_NAME" --stopkey || print_warning "Could not stop the active recording"
+    if rm "$INSTALL_DIR/$BINARY_NAME"; then
+        print_status "Removed $INSTALL_DIR/$BINARY_NAME"
+    else
+        print_warning "Could not remove $INSTALL_DIR/$BINARY_NAME"
+    fi
 fi
 
-# Ask about config removal
-echo
-read -p "Remove configuration directory ($CONFIG_DIR)? [y/N]: " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    if [[ -d "$CONFIG_DIR" ]]; then
-        rm -rf "$CONFIG_DIR"
-        print_status "Removed configuration directory"
-    fi
+read -r -p "Remove configuration directory ($CONFIG_DIR)? [y/N]: " reply
+if [[ "$reply" =~ ^[Yy]$ ]] && [[ -d "$CONFIG_DIR" ]]; then
+    rm -rf "$CONFIG_DIR"
+    print_status "Removed configuration directory"
 else
     print_info "Keeping configuration directory"
 fi
 
-# Remove GNOME hotkey
 if command -v gsettings >/dev/null 2>&1; then
-    print_info "Removing GNOME hotkey..."
-    
-    # Find and remove the custom keybinding
-    custom_bindings=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings 2>/dev/null || echo "[]")
-    
-    if [[ "$custom_bindings" != "[]" && "$custom_bindings" != "@as []" ]]; then
-        # Look for our keybinding
-        for binding in $(echo "$custom_bindings" | grep -o "'/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom[0-9]*/'"); do
-            binding_clean=$(echo "$binding" | tr -d "'")
-            cmd=$(gsettings get org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$binding_clean" command 2>/dev/null || echo "")
-            
-            if [[ "$cmd" =~ voice-typing ]]; then
-                # Remove this keybinding
-                gsettings reset org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$binding_clean" name 2>/dev/null || true
-                gsettings reset org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$binding_clean" command 2>/dev/null || true
-                gsettings reset org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$binding_clean" binding 2>/dev/null || true
-                
-                # Remove from the list
-                new_bindings=$(echo "$custom_bindings" | sed "s|, *$binding||g" | sed "s|$binding, *||g" | sed "s|$binding||g")
-                if [[ "$new_bindings" =~ ^\[.*\]$ ]]; then
-                    gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$new_bindings"
-                fi
-                
-                print_status "Removed GNOME hotkey"
-                break
-            fi
-        done
+    bindings="$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings 2>/dev/null || echo '@as []')"
+    kept=()
+    removed=0
+    while IFS= read -r candidate; do
+        candidate="${candidate//\'/}"
+        command="$(gsettings get "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$candidate" command 2>/dev/null || true)"
+        if [[ "$command" == *"$INSTALL_DIR/$BINARY_NAME"* ]]; then
+            gsettings reset "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$candidate" name 2>/dev/null || true
+            gsettings reset "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$candidate" command 2>/dev/null || true
+            gsettings reset "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$candidate" binding 2>/dev/null || true
+            ((removed++))
+        else
+            kept+=("'$candidate'")
+        fi
+    done < <(grep -o "'/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/[^']*/'" <<< "$bindings")
+
+    new_bindings="@as []"
+    if (( ${#kept[@]} > 0 )); then
+        joined="$(IFS=,; echo "${kept[*]}")"
+        new_bindings="[$joined]"
+    fi
+    if (( removed > 0 )); then
+        gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$new_bindings"
+        print_status "Removed $removed GNOME keybinding(s)"
     fi
 fi
 
-echo
-print_status "Uninstall completed!"
-print_info "You may want to manually remove these dependencies if not used elsewhere:"
+service_file="$HOME/.config/systemd/user/ydotoold.service"
+if [[ -f "$service_file" ]] && grep -Fq '# Managed by the voice-typing installer' "$service_file"; then
+    systemctl --user disable --now ydotoold >/dev/null 2>&1 || true
+    if rm "$service_file"; then
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+        print_status "Removed the managed ydotoold service"
+    fi
+fi
+
+print_status "Uninstall completed"
+print_info "Optional dependency cleanup:"
 echo "  sudo apt remove portaudio19-dev wtype ydotool wl-clipboard xdotool xclip xsel"

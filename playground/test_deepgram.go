@@ -4,105 +4,77 @@ import (
 	"context"
 	"log"
 	"os"
+	"sync/atomic"
 	"time"
 
 	msginterfaces "github.com/deepgram/deepgram-go-sdk/v3/pkg/api/listen/v1/websocket/interfaces"
 	interfaces "github.com/deepgram/deepgram-go-sdk/v3/pkg/client/interfaces/v1"
 	"github.com/deepgram/deepgram-go-sdk/v3/pkg/client/listen"
+
+	"voice-typing/internal"
 )
 
 type TestCallback struct {
-	connected bool
-	messages  int
+	messages atomic.Int64
 }
 
-func (tc *TestCallback) Open(or *msginterfaces.OpenResponse) error {
-	log.Println("✅ WebSocket OPENED successfully!")
-	tc.connected = true
+func (tc *TestCallback) Open(*msginterfaces.OpenResponse) error {
+	log.Println("✅ WebSocket opened")
 	return nil
 }
 
-func (tc *TestCallback) Message(mr *msginterfaces.MessageResponse) error {
-	tc.messages++
-	if len(mr.Channel.Alternatives) > 0 {
-		transcript := mr.Channel.Alternatives[0].Transcript
+func (tc *TestCallback) Message(response *msginterfaces.MessageResponse) error {
+	count := tc.messages.Add(1)
+	if len(response.Channel.Alternatives) > 0 {
+		transcript := response.Channel.Alternatives[0].Transcript
 		if transcript != "" {
-			log.Printf("📝 Transcript (%d): %s (final: %t)", tc.messages, transcript, mr.IsFinal)
+			log.Printf("📝 Transcript (%d): %s (final: %t)", count, transcript, response.IsFinal)
 		}
 	}
 	return nil
 }
 
-func (tc *TestCallback) Metadata(md *msginterfaces.MetadataResponse) error {
-	log.Printf("📊 Metadata received")
+func (tc *TestCallback) Metadata(*msginterfaces.MetadataResponse) error {
+	log.Println("📊 Metadata received")
 	return nil
 }
 
-func (tc *TestCallback) SpeechStarted(ssr *msginterfaces.SpeechStartedResponse) error {
-	log.Printf("🎤 Speech started")
+func (tc *TestCallback) SpeechStarted(*msginterfaces.SpeechStartedResponse) error {
+	log.Println("🎤 Speech started")
 	return nil
 }
 
-func (tc *TestCallback) UtteranceEnd(ur *msginterfaces.UtteranceEndResponse) error {
-	log.Printf("🏁 Utterance ended")
+func (tc *TestCallback) UtteranceEnd(*msginterfaces.UtteranceEndResponse) error {
+	log.Println("🏁 Utterance ended")
 	return nil
 }
 
-func (tc *TestCallback) Close(cr *msginterfaces.CloseResponse) error {
-	log.Printf("❌ WebSocket closed")
+func (tc *TestCallback) Close(*msginterfaces.CloseResponse) error {
+	log.Println("WebSocket closed")
 	return nil
 }
 
-func (tc *TestCallback) Error(er *msginterfaces.ErrorResponse) error {
-	log.Printf("🚨 WebSocket error: %s", er.ErrMsg)
+func (tc *TestCallback) Error(response *msginterfaces.ErrorResponse) error {
+	log.Printf("WebSocket error: %s", response.ErrMsg)
 	return nil
 }
 
-func (tc *TestCallback) UnhandledEvent(byData []byte) error {
-	log.Printf("❓ Unhandled event: %s", string(byData))
+func (tc *TestCallback) UnhandledEvent(data []byte) error {
+	log.Printf("Unhandled event: %s", data)
 	return nil
 }
 
 func main() {
-	// Read API key from config.json
 	apiKey := os.Getenv("DEEPGRAM_API_KEY")
 	if apiKey == "" {
-		// Try to read from config file
-		if data, err := os.ReadFile("config.json"); err == nil {
-			// Simple extraction - just find the key value
-			content := string(data)
-			start := "\"deepgram_api_key\": \""
-			if idx := len(start); idx > 0 {
-				if startIdx := len(content); startIdx > 0 {
-					for i := 0; i < len(content)-len(start); i++ {
-						if content[i:i+len(start)] == start {
-							endIdx := i + len(start)
-							for j := endIdx; j < len(content); j++ {
-								if content[j] == '"' {
-									apiKey = content[endIdx:j]
-									break
-								}
-							}
-							break
-						}
-					}
-				}
-			}
+		config, err := internal.LoadConfig("config.json")
+		if err != nil {
+			log.Fatalf("Set DEEPGRAM_API_KEY or provide config.json: %v", err)
 		}
+		apiKey = config.DeepgramAPIKey
 	}
 
-	if apiKey == "" || apiKey == "your_deepgram_api_key_here" {
-		log.Fatal("❌ Please set DEEPGRAM_API_KEY environment variable or update config.json")
-	}
-
-	log.Printf("🔑 Using API key: %s...%s", apiKey[:8], apiKey[len(apiKey)-4:])
-
-	// Initialize SDK with trace logging
 	listen.Init(listen.InitLib{LogLevel: listen.LogLevelTrace})
-
-	ctx := context.Background()
-
-	// Set up options
 	options := &interfaces.LiveTranscriptionOptions{
 		Model:       "nova-3",
 		Language:    "en-US",
@@ -112,60 +84,30 @@ func main() {
 		SampleRate:  16000,
 		Channels:    1,
 	}
-
-	// Create callback
 	callback := &TestCallback{}
-
-	log.Println("🚀 Creating Deepgram WebSocket client...")
-
-	// Create WebSocket client
-	wsClient, err := listen.NewWSUsingCallback(ctx, apiKey, &interfaces.ClientOptions{}, options, callback)
+	client, err := listen.NewWSUsingCallback(
+		context.Background(),
+		apiKey,
+		&interfaces.ClientOptions{},
+		options,
+		callback,
+	)
 	if err != nil {
-		log.Fatalf("❌ Failed to create WebSocket client: %v", err)
+		log.Fatalf("Create WebSocket client: %v", err)
 	}
-
-	log.Println("🔗 Explicitly connecting WebSocket...")
-	wsClient.Connect()
-
-	log.Println("⏳ Waiting for WebSocket connection...")
-
-	// Wait for connection with timeout
-	timeout := time.After(15 * time.Second)
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-timeout:
-			log.Fatal("❌ Timeout waiting for WebSocket connection")
-		case <-ticker.C:
-			if callback.connected {
-				log.Println("✅ WebSocket connected! Sending test audio...")
-				goto connected
-			}
-			log.Print("⏳ Still waiting...")
-		}
+	if !client.Connect() {
+		log.Fatal("Connect to Deepgram WebSocket")
 	}
+	defer client.Stop()
 
-connected:
-	// Send some test audio data (silence)
-	testAudio := make([]byte, 1024*2) // 1024 samples of 16-bit audio (silence)
-
-	for i := 0; i < 10; i++ {
-		if err := wsClient.WriteBinary(testAudio); err != nil {
-			log.Printf("❌ Error sending audio data: %v", err)
-		} else {
-			log.Printf("📤 Sent test audio chunk %d", i+1)
+	silence := make([]byte, 1024*2)
+	for i := 1; i <= 10; i++ {
+		if err := client.WriteBinary(silence); err != nil {
+			log.Printf("Send audio chunk %d: %v", i, err)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-
-	log.Println("🎯 Test completed! Waiting 5 seconds for any final messages...")
+	log.Println("Waiting 5 seconds for final messages...")
 	time.Sleep(5 * time.Second)
-
-	log.Printf("📊 Final stats: Connected=%t, Messages=%d", callback.connected, callback.messages)
-
-	// Cleanup
-	wsClient.Stop()
-	log.Println("🏁 Test finished")
+	log.Printf("Received %d messages", callback.messages.Load())
 }

@@ -1,30 +1,29 @@
-.PHONY: build clean install test run release dist
+.PHONY: build release clean deps run hotkey stopkey test setup check-deps help dist
 
 # Build variables
 BINARY_NAME=voice-typing
-# Extract version from Go source code (e.g., VERSION = "0.1.1")
-VERSION=$(shell grep 'VERSION.*=' main.go | cut -d'"' -f2)
-BUILD_DIR=build
+VERSION=$(shell sed -n 's/^const version = "\(.*\)"/\1/p' main.go)
 DIST_DIR=dist
+DIST_PATH=$(abspath $(DIST_DIR))
 CONFIG_FILE=config.json
 
 # Build the binary
 build:
 	@echo "Building $(BINARY_NAME)..."
-	go build -trimpath -ldflags="-buildid=" -o $(BINARY_NAME) .
+	go build -buildvcs=false -trimpath -ldflags="-buildid=" -o $(BINARY_NAME) .
 	@echo "✅ Build complete: ./$(BINARY_NAME)"
 
 # Build for release with optimizations
 release:
 	@echo "Building release version..."
-	CGO_ENABLED=1 go build -trimpath -ldflags="-w -s -buildid=" -o $(BINARY_NAME) .
+	CGO_ENABLED=1 go build -buildvcs=false -trimpath -ldflags="-w -s -buildid=" -o $(BINARY_NAME) .
 	@echo "✅ Release build complete: ./$(BINARY_NAME)"
 
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
 	rm -f $(BINARY_NAME)
-	rm -rf $(BUILD_DIR)
+	rm -rf dist
 	@echo "✅ Clean complete"
 
 # Tidy dependencies (rarely needed - go build downloads deps automatically)
@@ -53,7 +52,6 @@ hotkey: build
 stopkey: build
 	./$(BINARY_NAME) --stopkey
 
-# Test the build (no tests currently implemented)
 test:
 	@echo "Running tests..."
 	go test -v ./...
@@ -94,7 +92,7 @@ help:
 	@echo "  run            - Build and run the application"
 	@echo "  hotkey         - Build and run in hotkey mode"
 	@echo "  stopkey        - Run stop hotkey command"
-	@echo "  test           - Run tests (none currently)"
+	@echo "  test           - Run tests"
 	@echo "  setup          - Setup development environment"
 	@echo "  check-deps     - Check system dependencies"
 	@echo "  help           - Show this help message"
@@ -104,32 +102,14 @@ help:
 dist: build
 	@echo "Creating distribution package..."
 	@echo "Version: $(VERSION)"
-	
-	# Create dist directory
-	mkdir -p $(DIST_DIR)
-	
-	# Create temporary directory for packaging
-	$(eval TEMP_DIR := $(shell mktemp -d))
-	$(eval PACKAGE_NAME := $(BINARY_NAME)-$(VERSION))
-	mkdir -p $(TEMP_DIR)/$(PACKAGE_NAME)
-	
-	# Copy distribution files
-	cp $(BINARY_NAME) $(TEMP_DIR)/$(PACKAGE_NAME)/
-	cp install.sh $(TEMP_DIR)/$(PACKAGE_NAME)/
-	cp uninstall.sh $(TEMP_DIR)/$(PACKAGE_NAME)/
-	cp config.example.json $(TEMP_DIR)/$(PACKAGE_NAME)/
-	cp README.md $(TEMP_DIR)/$(PACKAGE_NAME)/
-	
-	# Make scripts executable
-	chmod +x $(TEMP_DIR)/$(PACKAGE_NAME)/install.sh
-	chmod +x $(TEMP_DIR)/$(PACKAGE_NAME)/uninstall.sh
-	chmod +x $(TEMP_DIR)/$(PACKAGE_NAME)/$(BINARY_NAME)
-	
-	# Create zip package
-	cd $(TEMP_DIR) && zip -r $(CURDIR)/$(DIST_DIR)/$(PACKAGE_NAME).zip $(PACKAGE_NAME)
-	
-	# Clean up temp directory
-	rm -rf $(TEMP_DIR)
-	
-	@echo "✅ Distribution package created: $(DIST_DIR)/$(PACKAGE_NAME).zip"
-	@echo "Contents: binary, install.sh, uninstall.sh, config.example.json, README.md"
+	mkdir -p "$(DIST_PATH)"
+	@set -eu; \
+	package_name="$(BINARY_NAME)-$(VERSION)"; \
+	package_tmp="$$(mktemp -d)"; \
+	trap 'rm -rf "$$package_tmp"' EXIT; \
+	mkdir -p "$$package_tmp/$$package_name"; \
+	cp $(BINARY_NAME) install.sh uninstall.sh config.example.json README.md LICENSE "$$package_tmp/$$package_name/"; \
+	chmod +x "$$package_tmp/$$package_name/install.sh" "$$package_tmp/$$package_name/uninstall.sh" "$$package_tmp/$$package_name/$(BINARY_NAME)"; \
+	cd "$$package_tmp" && zip -r "$(DIST_PATH)/$$package_name.zip" "$$package_name"
+	@echo "✅ Distribution package created: $(DIST_DIR)/$(BINARY_NAME)-$(VERSION).zip"
+	@echo "Contents: binary, install.sh, uninstall.sh, config.example.json, README.md, LICENSE"

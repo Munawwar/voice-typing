@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 type TranscriptionConfig struct {
@@ -18,30 +19,26 @@ type TranscriptionConfig struct {
 
 type Config struct {
 	DeepgramAPIKey string              `json:"deepgram_api_key"`
-	Hotkey         string              `json:"hotkey"`
-	StopHotkey     string              `json:"stop_hotkey"`
 	Audio          AudioConfig         `json:"audio"`
 	Transcription  TranscriptionConfig `json:"transcription"`
 }
 
 func LoadConfig(path string) (*Config, error) {
-	file, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open config file: %w", err)
+		return nil, fmt.Errorf("read config: %w", err)
 	}
-	defer file.Close()
-
 	var config Config
-	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(&config); err != nil {
-		return nil, fmt.Errorf("failed to decode config: %w", err)
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("decode config: %w", err)
 	}
 
-	if config.DeepgramAPIKey == "" {
-		return nil, fmt.Errorf("deepgram_api_key is required in config")
+	config.DeepgramAPIKey = strings.TrimSpace(config.DeepgramAPIKey)
+	if config.DeepgramAPIKey == "" ||
+		config.DeepgramAPIKey == "your_deepgram_api_key_here" ||
+		config.DeepgramAPIKey == "your_actual_api_key_here" {
+		return nil, fmt.Errorf("deepgram_api_key must contain a real API key")
 	}
-
-	// Set defaults if not specified
 	if config.Audio.SampleRate == 0 {
 		config.Audio.SampleRate = 16000
 	}
@@ -51,12 +48,14 @@ func LoadConfig(path string) (*Config, error) {
 	if config.Audio.BufferSize == 0 {
 		config.Audio.BufferSize = 1024
 	}
+	if config.Audio.SampleRate < 1 || config.Audio.Channels < 1 || config.Audio.BufferSize < 1 {
+		return nil, fmt.Errorf("audio sample_rate, channels, and buffer_size must all be positive")
+	}
 	if config.Transcription.Model == "" {
 		config.Transcription.Model = "nova-3"
 	}
 	if config.Transcription.Language == "" {
 		config.Transcription.Language = "en-US"
 	}
-
 	return &config, nil
 }

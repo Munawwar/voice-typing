@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -12,369 +13,218 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"voice-typing/internal"
 )
 
-const (
-	VERSION   = "0.1.1"
-	LOCK_FILE = "/tmp/voice_recording.lock"
-)
+const version = "0.1.1"
 
-type SpeechService struct {
-	config        *internal.Config
-	audioStream   *internal.AudioStream
-	textInjector  *internal.TextInjector
-	transcription *internal.TranscriptionStack
-	deepgram      *internal.DeepgramService
-	recording     bool
-	initializing  bool
-}
+var sessionFile = func() string {
+	base := os.Getenv("XDG_RUNTIME_DIR")
+	if base == "" {
+		if cache, err := os.UserCacheDir(); err == nil {
+			base = filepath.Join(cache, "voice-typing")
+		} else {
+			base = filepath.Join(os.TempDir(), fmt.Sprintf("voice-typing-%d", os.Getuid()))
+		}
+	}
+	return filepath.Join(base, "session.lock")
+}()
 
 func main() {
-	var (
-		configPath = flag.String("config", "", "Path to configuration file")
-		version    = flag.Bool("version", false, "Show version information")
-		hotkey     = flag.Bool("hotkey", false, "Single hotkey toggle mode")
-		stopkey    = flag.Bool("stopkey", false, "Gracefully stop active recording")
-		service    = flag.Bool("service", false, "Run as persistent service")
-	)
+	configPath := flag.String("config", "", "Path to configuration file")
+	showVersion := flag.Bool("version", false, "Show version information")
+	hotkey := flag.Bool("hotkey", false, "Toggle recording")
+	stopkey := flag.Bool("stopkey", false, "Gracefully stop active recording")
 	flag.Parse()
 
-	if *version {
-		fmt.Printf("Voice Typing v%s\n", VERSION)
-		os.Exit(0)
+	if *showVersion {
+		fmt.Printf("Voice Typing v%s\n", version)
+		return
 	}
 
-	// Determine config path
-	if *configPath == "" {
-		// Try multiple locations in order:
-		// 1. config.json in current directory (local)
-		// 2. ~/.config/voice-typing/config.json (XDG standard)
-		homeDir, _ := os.UserHomeDir()
-		localConfigPath := "config.json"
-		xdgConfigPath := filepath.Join(homeDir, ".config", "voice-typing", "config.json")
+	if *stopkey {
+		active, err := signalActiveRecording(syscall.SIGUSR1)
+		if err != nil {
+			log.Printf("Failed to stop recording: %v", err)
+			showNotification("Voice Typing Error", "Failed to stop recording", "dialog-error")
+		} else if !active {
+			log.Println("No active recording found")
+			showNotification("Voice Typing", "No active recording to stop", "dialog-information")
+		}
+		return
+	}
 
-		if _, err := os.Stat(localConfigPath); err == nil {
-			*configPath = localConfigPath
-		} else if _, err := os.Stat(xdgConfigPath); err == nil {
-			*configPath = xdgConfigPath
-		} else {
-			// Default to XDG path even if it doesn't exist (for better error messages)
-			*configPath = xdgConfigPath
+	if *hotkey {
+		active, err := signalActiveRecording(syscall.SIGTERM)
+		if err != nil {
+			log.Printf("Failed to toggle recording: %v", err)
+			showNotification("Voice Typing Error", "Failed to stop recording", "dialog-error")
+			return
+		}
+		if active {
+			showNotification("Voice Typing Stopped", "Recording stopped.", "audio-input-microphone-muted")
+			return
 		}
 	}
 
-	// Load configuration
+	if *configPath == "" {
+		configHome, err := os.UserConfigDir()
+		if err != nil {
+			log.Fatalf("Failed to locate configuration directory: %v", err)
+		}
+		*configPath = filepath.Join(configHome, "voice-typing", "config.json")
+		if _, err := os.Stat("config.json"); err == nil {
+			*configPath = "config.json"
+		}
+	}
+
 	log.Printf("Loading config from: %s", *configPath)
 	cfg, err := internal.LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	log.Printf("Config loaded successfully")
 
-	log.Printf("Mode detection - hotkey: %v, stopkey: %v, service: %v", *hotkey, *stopkey, *service)
-
-	if *stopkey {
-		// Don't kill existing instances when we're just sending a stop signal
-		log.Println("Stop key pressed - requesting graceful stop")
-		handleGracefulStop()
-	} else if *hotkey {
-		// Kill existing instances to prevent conflicts (only for hotkey/recording modes)
-		if err := killExistingInstances(); err != nil {
-			log.Printf("Warning: %v", err)
-		}
-		log.Println("Hotkey mode - performing single toggle")
-		handleHotkeyToggle(cfg)
-	} else if *service {
-		// Kill existing instances to prevent conflicts
-		if err := killExistingInstances(); err != nil {
-			log.Printf("Warning: %v", err)
-		}
-		log.Println("Starting persistent service mode")
-		runPersistentService(cfg)
-	} else {
-		// Kill existing instances to prevent conflicts
-		if err := killExistingInstances(); err != nil {
-			log.Printf("Warning: %v", err)
-		}
-		// Default: single recording session
-		log.Println("Starting single recording session")
-		runSingleSession(cfg)
-	}
-
-	log.Println("Main function completed")
-}
-
-func killExistingInstances() error {
-	cmd := exec.Command("pgrep", "-f", "voice-typing")
-	output, err := cmd.Output()
-	if err != nil {
-		// No existing processes found
-		log.Println("No existing processes found")
-		return nil
-	}
-
-	currentPid := os.Getpid()
-	pids := strings.Split(strings.TrimSpace(string(output)), "\n")
-
-	log.Printf("Current PID: %d, Found PIDs: %v", currentPid, pids)
-
-	killedCount := 0
-	for _, pidStr := range pids {
-		if pidStr == "" {
-			continue
-		}
-
-		pid, err := strconv.Atoi(pidStr)
-		if err != nil {
-			log.Printf("Invalid PID: %s", pidStr)
-			continue
-		}
-
-		if pid == currentPid {
-			log.Printf("Skipping current process PID: %d", pid)
-			continue
-		}
-
-		if err := syscall.Kill(pid, syscall.SIGTERM); err == nil {
-			killedCount++
-			log.Printf("Killed existing process %d", pid)
-		} else {
-			log.Printf("Failed to kill process %d: %v", pid, err)
-		}
-	}
-
-	if killedCount > 0 {
-		time.Sleep(500 * time.Millisecond) // Give processes time to cleanup
-	}
-
-	log.Printf("Killed %d existing processes, continuing...", killedCount)
-	return nil
-}
-
-func handleHotkeyToggle(cfg *internal.Config) {
-	// Check for existing recording session
-	if _, err := os.Stat(LOCK_FILE); err == nil {
-		// Stop existing recording
-		stopExistingRecording()
-		return
-	}
-
-	// Start new recording session
-	startHotkeyRecording(cfg)
-}
-
-func handleGracefulStop() {
-	// Check if there's an active recording
-	data, err := os.ReadFile(LOCK_FILE)
-	if err != nil {
-		log.Println("No active recording found")
-		showNotification("Voice Typing", "No active recording to stop", "dialog-information")
-		return
-	}
-
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		log.Printf("Invalid PID in lock file: %v", err)
-		os.Remove(LOCK_FILE)
-		showNotification("Voice Typing Error", "Invalid lock file", "dialog-error")
-		return
-	}
-
-	// Send SIGUSR1 for graceful stop
-	log.Printf("Sending graceful stop signal (SIGUSR1) to PID %d", pid)
-	if err := syscall.Kill(pid, syscall.SIGUSR1); err != nil {
-		log.Printf("Error sending stop signal to process %d: %v", pid, err)
-		showNotification("Voice Typing Error", "Failed to send stop signal", "dialog-error")
-		return
-	}
-
-	// showNotification("Voice Typing", "Stopping recording gracefully...", "audio-input-microphone-muted")
-}
-
-func stopExistingRecording() {
-	data, err := os.ReadFile(LOCK_FILE)
-	if err != nil {
-		log.Printf("Error reading lock file: %v", err)
-		os.Remove(LOCK_FILE)
-		return
-	}
-
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		log.Printf("Invalid PID in lock file: %v", err)
-		os.Remove(LOCK_FILE)
-		return
-	}
-
-	log.Println("Stopping active voice recording...")
-
-	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
-		log.Printf("Error stopping process %d: %v", pid, err)
-	} else {
-		showNotification("Voice Typing Stopped", "Recording interrupted by hotkey.", "audio-input-microphone-muted")
-	}
-
-	time.Sleep(500 * time.Millisecond)
-	os.Remove(LOCK_FILE)
-}
-
-func startHotkeyRecording(cfg *internal.Config) {
-	// Create lock file
-	if err := os.WriteFile(LOCK_FILE, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
-		log.Printf("Warning: Could not create lock file: %v", err)
-	}
-	defer os.Remove(LOCK_FILE)
-
-	showNotification("Voice Typing Service", "Initializing... Please wait.", "audio-input-microphone")
-
-	// Run single recording session
-	runSingleSession(cfg)
-}
-
-func runSingleSession(cfg *internal.Config) {
-	log.Println("Creating speech service...")
-	service := NewSpeechService(cfg)
-	log.Println("Speech service created")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Setup signal handling
-	// SIGTERM: Force stop (from toggle hotkey)
-	// SIGUSR1: Graceful stop (from stop hotkey)
-	// SIGINT: Ctrl+C (graceful stop)
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGUSR1)
-
-	go func() {
-		sig := <-sigChan
-		switch sig {
-		case syscall.SIGUSR1:
-			log.Println("\nReceived graceful stop signal (SIGUSR1)")
-		case syscall.SIGTERM:
-			log.Println("\nReceived force stop signal (SIGTERM)")
-		case os.Interrupt:
-			log.Println("\nReceived interrupt signal (Ctrl+C)")
-		}
-		cancel()
-	}()
-
-	log.Println("Starting recording...")
-	if err := service.StartRecording(ctx, true); err != nil {
+	if err := runSingleSession(cfg); err != nil {
 		log.Printf("Recording failed: %v", err)
-		showNotification("Speech Recognition", fmt.Sprintf("Failed: %s", err.Error()[:50]), "dialog-error")
-	}
-	log.Println("Recording session completed")
-}
-
-func runPersistentService(cfg *internal.Config) {
-	log.Println("Persistent service mode not yet implemented")
-	log.Println("Use desktop environment hotkey settings to bind Super+] to:")
-	log.Printf("   %s --hotkey", os.Args[0])
-}
-
-func NewSpeechService(cfg *internal.Config) *SpeechService {
-	textInjector := internal.NewTextInjector()
-	transcriptionStack := internal.NewTranscriptionStack(textInjector)
-
-	return &SpeechService{
-		config:        cfg,
-		textInjector:  textInjector,
-		transcription: transcriptionStack,
-		recording:     false,
-		initializing:  false,
-	}
-}
-
-func (s *SpeechService) StartRecording(ctx context.Context, realTimeTyping bool) error {
-	if s.recording || s.initializing {
-		return fmt.Errorf("already recording or initializing")
-	}
-
-	s.initializing = true
-	s.recording = true
-	defer func() {
-		s.recording = false
-		s.initializing = false
-	}()
-
-	log.Println("Starting speech recognition...")
-	log.Printf("Config loaded: API key length=%d, Sample rate=%d", len(s.config.DeepgramAPIKey), s.config.Audio.SampleRate)
-
-	// Initialize audio stream
-	audioStream, err := internal.NewAudioStream(&s.config.Audio)
-	if err != nil {
-		return fmt.Errorf("failed to initialize audio: %w", err)
-	}
-	s.audioStream = audioStream
-	defer s.audioStream.Stop()
-
-	// Initialize Deepgram service
-	deepgramService, err := internal.NewDeepgramService(s.config, s.transcription)
-	if err != nil {
-		return fmt.Errorf("failed to initialize Deepgram: %w", err)
-	}
-	s.deepgram = deepgramService
-	defer s.deepgram.Close()
-
-	// Clear transcription state
-	s.transcription.Clear()
-
-	// Start audio stream
-	if err := s.audioStream.Start(); err != nil {
-		return fmt.Errorf("failed to start audio stream: %w", err)
-	}
-
-	s.initializing = false
-
-	// Show ready notification
-	if realTimeTyping {
-		showNotification("Voice Typing Ready!",
-			"Focus on a text field and start talking. Say 'stop voice' to stop.",
-			"audio-input-microphone")
-	}
-
-	// Start Deepgram streaming
-	streamCtx, streamCancel := context.WithCancel(ctx)
-	defer streamCancel()
-
-	streamErr := make(chan error, 1)
-	go func() {
-		streamErr <- s.deepgram.StartStreaming(streamCtx, s.audioStream, realTimeTyping)
-	}()
-
-	// Monitor for stop conditions
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("Stopping due to context cancellation (signal received)")
-			showNotification("Voice Typing Stopped", "Recording stopped.", "audio-input-microphone-muted")
-			return nil
-		case err := <-streamErr:
-			if err != nil {
-				return fmt.Errorf("streaming error: %w", err)
-			}
-			return nil
-		case <-ticker.C:
-			if s.deepgram.IsStopRequested() {
-				log.Println("Stopping due to voice command")
-				showNotification("Voice Typing Stopped", "Recording ended by voice command.", "audio-input-microphone-muted")
-				return nil
-			}
+		message := []rune(err.Error())
+		if len(message) > 50 {
+			message = message[:50]
 		}
+		showNotification("Speech Recognition", "Failed: "+string(message), "dialog-error")
+	}
+}
+
+func processStartTime(pid int) (string, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return "", err
+	}
+	closingParen := strings.LastIndexByte(string(data), ')')
+	if closingParen < 0 {
+		return "", fmt.Errorf("invalid process stat")
+	}
+	fields := strings.Fields(string(data[closingParen+1:]))
+	if len(fields) <= 19 {
+		return "", fmt.Errorf("process stat has %d fields", len(fields))
+	}
+	return fields[19], nil
+}
+
+func activeRecordingPID() (int, bool, error) {
+	data, err := os.ReadFile(sessionFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+
+	fields := strings.Fields(string(data))
+	pid := 0
+	if len(fields) > 0 {
+		pid, _ = strconv.Atoi(fields[0])
+	}
+	valid := false
+	if pid > 0 {
+		startTime, statErr := processStartTime(pid)
+		valid = statErr == nil && len(fields) == 2 && fields[1] == startTime
+		if statErr == nil && len(fields) == 1 {
+			executable, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+			valid = err == nil && strings.Contains(filepath.Base(executable), "voice-typing")
+		}
+	}
+	if valid {
+		return pid, true, nil
+	}
+	if err := os.Remove(sessionFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, false, err
+	}
+	return 0, false, nil
+}
+
+func signalActiveRecording(sig syscall.Signal) (bool, error) {
+	pid, active, err := activeRecordingPID()
+	if err != nil || !active {
+		return active, err
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false, err
+	}
+	if err := process.Signal(sig); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func runSingleSession(cfg *internal.Config) error {
+	if err := os.MkdirAll(filepath.Dir(sessionFile), 0700); err != nil {
+		return fmt.Errorf("failed to create recording session directory: %w", err)
+	}
+	if _, active, err := activeRecordingPID(); err != nil {
+		return fmt.Errorf("failed to inspect recording session: %w", err)
+	} else if active {
+		return fmt.Errorf("another recording is already active")
+	}
+
+	lock, err := os.OpenFile(sessionFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("another recording is already starting")
+		}
+		return fmt.Errorf("failed to create recording session: %w", err)
+	}
+	startTime, err := processStartTime(os.Getpid())
+	if err == nil {
+		_, err = fmt.Fprintf(lock, "%d %s\n", os.Getpid(), startTime)
+	}
+	closeErr := lock.Close()
+	if err != nil || closeErr != nil {
+		_ = os.Remove(sessionFile)
+		return fmt.Errorf("failed to write recording session: %w", errors.Join(err, closeErr))
+	}
+	defer os.Remove(sessionFile)
+
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGUSR1)
+	defer stopSignals()
+
+	injector := internal.NewTextInjector()
+	return record(ctx, cfg, internal.NewTranscriptionStack(injector))
+}
+
+func record(ctx context.Context, config *internal.Config, transcription *internal.TranscriptionStack) error {
+	audioStream, err := internal.StartAudioStream(&config.Audio)
+	if err != nil {
+		return fmt.Errorf("failed to start audio: %w", err)
+	}
+	defer func() {
+		if err := audioStream.Stop(); err != nil {
+			log.Printf("Failed to stop audio cleanly: %v", err)
+		}
+	}()
+
+	err = internal.StreamTranscription(ctx, config, transcription, audioStream, func() {
+		showNotification(
+			"Voice Typing Ready!",
+			"Focus on a text field and start talking. Say 'stop voice' to stop.",
+			"audio-input-microphone",
+		)
+	})
+	switch {
+	case errors.Is(err, internal.ErrVoiceStop):
+		showNotification("Voice Typing Stopped", "Recording ended by voice command.", "audio-input-microphone-muted")
+		return nil
+	case err != nil:
+		return fmt.Errorf("streaming error: %w", err)
+	default:
+		showNotification("Voice Typing Stopped", "Recording stopped.", "audio-input-microphone-muted")
+		return nil
 	}
 }
 
 func showNotification(title, message, icon string) {
-	cmd := exec.Command("notify-send", title, message, "--icon="+icon, "--expire-time=3000")
-	if err := cmd.Run(); err != nil {
-		// Notifications are optional, don't fail if they don't work
+	if err := exec.Command("notify-send", title, message, "--icon="+icon, "--expire-time=3000").Run(); err != nil {
 		log.Printf("Notification failed: %v", err)
 	}
 }

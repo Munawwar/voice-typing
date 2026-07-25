@@ -7,7 +7,7 @@ Linux real-time voice typing tool using Deepgram's streaming API. Works on both 
 - **Real-time transcription**: Text appears immediately as you speak
 - **Voice commands**: "undo that", "newline", "new paragraph", "stop voice"
 - **Graceful stop hotkey**: Stop recording with a separate hotkey (no force kill)
-- **Fallback text injection**: Direct typing → Clipboard paste → Silent mode
+- **Fallback text injection**: Direct typing → Clipboard paste
 - **Single binary**: Not too many dependencies (Great to bind it to keyboard hotkey)
 - **Desktop integration**: GNOME/Unity hotkey integrated during install
 
@@ -26,9 +26,11 @@ Any alternative you suggest me needs to:
 ### Quick Install (Recommended)
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/Munawwar/voice-typing.git
+cd voice-typing
 
-# Copy config.example.json to config.json and add your deepgram API
+# Copy config.example.json to config.json and add your Deepgram API key
+cp config.example.json config.json
 
 ./install.sh
 
@@ -73,7 +75,9 @@ Optionally, set up a **stop hotkey** (Super+[) for graceful stopping:
 /path/to/voice-typing --stopkey
 ```
 
-The stop hotkey sends a **SIGUSR1** signal for graceful shutdown, ensuring proper cleanup of audio streams, WebSocket connections, and temporary files. This is more elegant than the toggle hotkey which uses SIGTERM.
+Both shortcuts stop the owned recording process cleanly. The separate stop
+shortcut never starts a new session, while the toggle shortcut starts recording
+when no session is active.
 
 **GNOME**: Settings → Keyboard → Custom Shortcuts
 **KDE**: System Settings → Shortcuts → Custom Shortcuts
@@ -94,8 +98,6 @@ The stop hotkey sends a **SIGUSR1** signal for graceful shutdown, ensuring prope
 ```json
 {
   "deepgram_api_key": "your_key",
-  "hotkey": "Super_R+bracketright",
-  "stop_hotkey": "Super_R+bracketleft",
   "audio": {
     "sample_rate": 16000,
     "channels": 1,
@@ -132,14 +134,15 @@ You can find docs on the `transcription` configs at [deepgram's docs](https://de
 ├─────────────────────────────────────────────────────────────┤
 │  Text Injection                                             │
 │  ├─ Tool detection (ydotool, wtype, xdotool)                │
-│  ├─ Fallback hierarchy                                      │
+│  ├─ Clipboard fallback                                      │
 │  └─ Cross-platform support                                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## Troubleshooting
 
-- Re-run install script if you change API key: `./install.sh`
+- Edit `~/.config/voice-typing/config.json` to change the installed API key;
+  restarting the next recording session is enough.
 
 ### Audio Issues
 - Ensure your microphone is working: `arecord -l`
@@ -169,6 +172,9 @@ You can find docs on the `transcription` configs at [deepgram's docs](https://de
 ## Development
 
 ```bash
+# Run tests
+go test ./...
+
 # Run with debug logging
 DEEPGRAM_LOG_LEVEL=DEBUG ./voice-typing
 
