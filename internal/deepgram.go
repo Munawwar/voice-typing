@@ -95,6 +95,7 @@ func StreamTranscription(
 	config *Config,
 	stack *TranscriptionStack,
 	audioStream *AudioStream,
+	vadEnabled bool,
 	ready func(),
 ) error {
 	ds := &deepgramService{
@@ -102,6 +103,15 @@ func StreamTranscription(
 		stack:    stack,
 		stop:     make(chan struct{}),
 		failures: make(chan error, 1),
+	}
+	var gate *audioGate
+	if vadEnabled {
+		var err error
+		gate, err = newAudioGate(ds.config.Audio.SampleRate, ds.config.Audio.Channels)
+		if err != nil {
+			return err
+		}
+		log.Printf("Local VAD enabled (%d ms idle timeout, %d ms pre-roll)", vadIdleAfterMS, vadPreRollMS)
 	}
 	listen.InitWithDefault()
 	options := &interfaces.LiveTranscriptionOptions{
@@ -122,7 +132,7 @@ func StreamTranscription(
 	client, err := listen.NewWSUsingCallback(
 		ctx,
 		ds.config.DeepgramAPIKey,
-		&interfaces.ClientOptions{},
+		&interfaces.ClientOptions{EnableKeepAlive: vadEnabled},
 		options,
 		&deepgramCallback{service: ds},
 	)
@@ -152,6 +162,15 @@ func StreamTranscription(
 		case data, ok := <-audio:
 			if !ok {
 				return nil
+			}
+			if gate != nil {
+				data, err = gate.Process(data)
+				if err != nil {
+					return err
+				}
+				if len(data) == 0 {
+					continue
+				}
 			}
 			if err := client.WriteBinary(data); err != nil {
 				return fmt.Errorf("send audio to Deepgram: %w", err)

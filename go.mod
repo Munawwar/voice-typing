@@ -6,6 +6,7 @@ require (
 	github.com/atotto/clipboard v0.1.4
 	github.com/deepgram/deepgram-go-sdk/v3 v3.5.0
 	github.com/gordonklaus/portaudio v0.0.0-20250206071425-98a94950218b
+	github.com/maxhawkins/go-webrtcvad v0.0.0-20210121163624-be60036f3083
 )
 
 require (

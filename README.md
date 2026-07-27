@@ -5,6 +5,7 @@ Linux real-time voice typing tool using Deepgram's streaming API. Works on both 
 ## Features
 
 - **Real-time transcription**: Text appears immediately as you speak
+- **Local silence detection**: Pauses cloud audio during idle periods to reduce usage
 - **Voice commands**: "undo that", "newline", "new paragraph", "stop voice"
 - **Graceful stop hotkey**: Stop recording with a separate hotkey (no force kill)
 - **Fallback text injection**: Direct typing → Clipboard paste
@@ -63,12 +64,22 @@ make build
 ./voice-typing
 ```
 
+Local voice activity detection is enabled by default. It keeps the microphone
+active locally but pauses audio sent to Deepgram after two seconds of silence.
+To disable it while troubleshooting:
+
+```bash
+./voice-typing --vad=false
+```
+
 ### Hotkey Mode (Recommended)
 
 Set up a desktop hotkey (Super+]) that runs:
 ```bash
 /path/to/voice-typing --hotkey
 ```
+
+Append `--vad=false` to the hotkey command to disable local silence detection.
 
 Optionally, set up a **stop hotkey** (Super+[) for graceful stopping:
 ```bash
@@ -125,7 +136,8 @@ You can find docs on the `transcription` configs at [deepgram's docs](https://de
 ├─────────────────────────────────────────────────────────────┤
 │  Audio Capture (PortAudio)                                  │
 │  ├─ Microphone input                                        │
-│  └─ Stream to Deepgram WebSocket                            │
+│  ├─ Local voice activity detection and pre-roll             │
+│  └─ Gated stream to Deepgram WebSocket                      │
 ├─────────────────────────────────────────────────────────────┤
 │  Transcription Engine                                       │
 │  ├─ Deepgram Go SDK v3                                      │

@@ -36,6 +36,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "Show version information")
 	hotkey := flag.Bool("hotkey", false, "Toggle recording")
 	stopkey := flag.Bool("stopkey", false, "Gracefully stop active recording")
+	vadEnabled := flag.Bool("vad", true, "Pause Deepgram audio during silence")
 	flag.Parse()
 
 	if *showVersion {
@@ -85,7 +86,7 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	if err := runSingleSession(cfg); err != nil {
+	if err := runSingleSession(cfg, *vadEnabled); err != nil {
 		log.Printf("Recording failed: %v", err)
 		message := []rune(err.Error())
 		if len(message) > 50 {
@@ -158,7 +159,7 @@ func signalActiveRecording(sig syscall.Signal) (bool, error) {
 	return true, nil
 }
 
-func runSingleSession(cfg *internal.Config) error {
+func runSingleSession(cfg *internal.Config, vadEnabled bool) error {
 	if err := os.MkdirAll(filepath.Dir(sessionFile), 0700); err != nil {
 		return fmt.Errorf("failed to create recording session directory: %w", err)
 	}
@@ -190,10 +191,10 @@ func runSingleSession(cfg *internal.Config) error {
 	defer stopSignals()
 
 	injector := internal.NewTextInjector()
-	return record(ctx, cfg, internal.NewTranscriptionStack(injector))
+	return record(ctx, cfg, internal.NewTranscriptionStack(injector), vadEnabled)
 }
 
-func record(ctx context.Context, config *internal.Config, transcription *internal.TranscriptionStack) error {
+func record(ctx context.Context, config *internal.Config, transcription *internal.TranscriptionStack, vadEnabled bool) error {
 	audioStream, err := internal.StartAudioStream(&config.Audio)
 	if err != nil {
 		return fmt.Errorf("failed to start audio: %w", err)
@@ -204,7 +205,7 @@ func record(ctx context.Context, config *internal.Config, transcription *interna
 		}
 	}()
 
-	err = internal.StreamTranscription(ctx, config, transcription, audioStream, func() {
+	err = internal.StreamTranscription(ctx, config, transcription, audioStream, vadEnabled, func() {
 		showNotification(
 			"Voice Typing Ready!",
 			"Focus on a text field and start talking. Say 'stop voice' to stop.",
