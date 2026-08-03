@@ -21,6 +21,9 @@ func TestLoadConfigDefaultsAndValidation(t *testing.T) {
 	if config.Transcription.Model != "nova-3" || config.Transcription.Language != "en-US" {
 		t.Fatalf("unexpected transcription defaults: %+v", config.Transcription)
 	}
+	if config.Transcription.MipOptIn {
+		t.Fatal("MIP participation enabled by default")
+	}
 
 	for _, invalid := range []string{
 		`{"deepgram_api_key":"your_deepgram_api_key_here"}`,

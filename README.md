@@ -80,6 +80,8 @@ Set up a desktop hotkey (Super+]) that runs:
 ```
 
 Append `--vad=false` to the hotkey command to disable local silence detection.
+Pass `--debug` when troubleshooting to log transcripts and enable Deepgram SDK
+debug output. Transcript logging is disabled by default.
 
 Optionally, set up a **stop hotkey** (Super+[) for graceful stopping:
 ```bash
@@ -121,12 +123,14 @@ never starts a new session.
     "punctuate": true,
     "profanity_filter": true,
     "filler_words": true,
-    "mip_opt_out": true
+    "mip_opt_in": false
   }
 }
 ```
 
 You can find docs on the `transcription` configs at [deepgram's docs](https://developers.deepgram.com/reference/speech-to-text-api/listen-streaming).
+`mip_opt_in` defaults to `false`; set it to `true` only if you consent to
+Deepgram using your audio under its Model Improvement Program.
 
 ## Architecture
 
@@ -187,8 +191,8 @@ You can find docs on the `transcription` configs at [deepgram's docs](https://de
 # Run tests
 go test ./...
 
-# Run with debug logging
-DEEPGRAM_LOG_LEVEL=DEBUG ./voice-typing
+# Run with transcript and Deepgram SDK debug logging
+./voice-typing --debug
 
 # Build for release
 make release

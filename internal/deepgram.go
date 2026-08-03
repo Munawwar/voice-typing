@@ -21,6 +21,7 @@ type deepgramService struct {
 	stop     chan struct{}
 	failures chan error
 	stopOnce sync.Once
+	debug    bool
 }
 
 type deepgramCallback struct {
@@ -41,7 +42,9 @@ func (dc *deepgramCallback) Message(response *msginterfaces.MessageResponse) err
 		return nil
 	}
 
-	log.Printf("Deepgram transcript: %s", transcript)
+	if dc.service.debug {
+		log.Printf("Deepgram transcript: %s", transcript)
+	}
 	stop, err := dc.service.stack.addPhrase(transcript)
 	if err != nil {
 		select {
@@ -61,12 +64,16 @@ func (dc *deepgramCallback) Metadata(*msginterfaces.MetadataResponse) error {
 }
 
 func (dc *deepgramCallback) SpeechStarted(*msginterfaces.SpeechStartedResponse) error {
-	log.Println("Speech started")
+	if dc.service.debug {
+		log.Println("Speech started")
+	}
 	return nil
 }
 
 func (dc *deepgramCallback) UtteranceEnd(*msginterfaces.UtteranceEndResponse) error {
-	log.Println("Utterance ended")
+	if dc.service.debug {
+		log.Println("Utterance ended")
+	}
 	return nil
 }
 
@@ -86,7 +93,9 @@ func (dc *deepgramCallback) Error(response *msginterfaces.ErrorResponse) error {
 }
 
 func (dc *deepgramCallback) UnhandledEvent(data []byte) error {
-	log.Printf("Unhandled event: %s", data)
+	if dc.service.debug {
+		log.Printf("Unhandled event: %s", data)
+	}
 	return nil
 }
 
@@ -96,6 +105,7 @@ func StreamTranscription(
 	stack *TranscriptionStack,
 	audioStream *AudioStream,
 	vadEnabled bool,
+	debug bool,
 	ready func(),
 ) error {
 	ds := &deepgramService{
@@ -103,6 +113,7 @@ func StreamTranscription(
 		stack:    stack,
 		stop:     make(chan struct{}),
 		failures: make(chan error, 1),
+		debug:    debug,
 	}
 	var gate *audioGate
 	if vadEnabled {
@@ -113,7 +124,11 @@ func StreamTranscription(
 		}
 		log.Printf("Local VAD enabled (%d ms idle timeout, %d ms pre-roll)", vadIdleAfterMS, vadPreRollMS)
 	}
-	listen.InitWithDefault()
+	sdkInit := listen.InitLib{LogLevel: listen.LogLevelStandard}
+	if debug {
+		sdkInit.LogLevel = listen.LogLevelDebug
+	}
+	listen.Init(sdkInit)
 	options := &interfaces.LiveTranscriptionOptions{
 		Model:           ds.config.Transcription.Model,
 		Language:        ds.config.Transcription.Language,
@@ -125,7 +140,7 @@ func StreamTranscription(
 		SampleRate:      ds.config.Audio.SampleRate,
 		Channels:        ds.config.Audio.Channels,
 	}
-	if ds.config.Transcription.MipOptOut {
+	if !ds.config.Transcription.MipOptIn {
 		ctx = interfaces.WithCustomParameters(ctx, map[string][]string{"mip_opt_out": {"true"}})
 	}
 

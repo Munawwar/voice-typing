@@ -13,6 +13,6 @@
     "punctuate": true,
     "profanity_filter": true,
     "filler_words": true,
-    "mip_opt_out": true
+    "mip_opt_in": false
   }
 }

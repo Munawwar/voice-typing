@@ -14,7 +14,7 @@ type TranscriptionConfig struct {
 	Punctuate       bool   `json:"punctuate"`
 	ProfanityFilter bool   `json:"profanity_filter"`
 	FillerWords     bool   `json:"filler_words"`
-	MipOptOut       bool   `json:"mip_opt_out"`
+	MipOptIn        bool   `json:"mip_opt_in"`
 }
 
 type Config struct {
