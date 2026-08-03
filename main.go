@@ -34,7 +34,7 @@ var sessionFile = func() string {
 func main() {
 	configPath := flag.String("config", "", "Path to configuration file")
 	showVersion := flag.Bool("version", false, "Show version information")
-	hotkey := flag.Bool("hotkey", false, "Toggle recording")
+	hotkey := flag.Bool("hotkey", false, "Start recording unless already active")
 	stopkey := flag.Bool("stopkey", false, "Gracefully stop active recording")
 	vadEnabled := flag.Bool("vad", true, "Pause Deepgram audio during silence")
 	flag.Parse()
@@ -57,14 +57,15 @@ func main() {
 	}
 
 	if *hotkey {
-		active, err := signalActiveRecording(syscall.SIGTERM)
+		_, active, err := activeRecordingPID()
 		if err != nil {
-			log.Printf("Failed to toggle recording: %v", err)
-			showNotification("Voice Typing Error", "Failed to stop recording", "dialog-error")
+			log.Printf("Failed to inspect recording session: %v", err)
+			showNotification("Voice Typing Error", "Failed to check recording status", "dialog-error")
 			return
 		}
 		if active {
-			showNotification("Voice Typing Stopped", "Recording stopped.", "audio-input-microphone-muted")
+			log.Println("Voice typing is already running")
+			showNotification("Voice Typing", "Voice typing is already running.", "audio-input-microphone")
 			return
 		}
 	}

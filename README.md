@@ -86,9 +86,9 @@ Optionally, set up a **stop hotkey** (Super+[) for graceful stopping:
 /path/to/voice-typing --stopkey
 ```
 
-Both shortcuts stop the owned recording process cleanly. The separate stop
-shortcut never starts a new session, while the toggle shortcut starts recording
-when no session is active.
+The start shortcut is ignored with a notification when a recording is already
+active. The separate stop shortcut stops the owned recording process cleanly and
+never starts a new session.
 
 **GNOME**: Settings → Keyboard → Custom Shortcuts
 **KDE**: System Settings → Shortcuts → Custom Shortcuts

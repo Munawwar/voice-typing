@@ -259,7 +259,7 @@ if [[ "$desktop_lower" =~ (^|:)(gnome|unity|ubuntu)(:|$) ]] &&
 else
     print_info "Configure these two application shortcuts in $desktop:"
     echo
-    echo "  Start/Toggle: $INSTALL_DIR/$BINARY_NAME --hotkey"
+    echo "  Start: $INSTALL_DIR/$BINARY_NAME --hotkey"
     echo "  Suggested shortcut: Super+]"
     echo
     echo "  Stop: $INSTALL_DIR/$BINARY_NAME --stopkey"
@@ -282,4 +282,4 @@ if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]] && ! id -nG | tr ' ' '\n' | grep -
 fi
 
 print_status "Installation completed"
-print_info "Press Super+] to toggle recording or run $BINARY_NAME directly"
+print_info "Press Super+] to start recording or run $BINARY_NAME directly"
