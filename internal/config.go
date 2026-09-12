@@ -8,13 +8,14 @@ import (
 )
 
 type TranscriptionConfig struct {
-	Model           string `json:"model"`
-	Language        string `json:"language"`
-	SmartFormat     bool   `json:"smart_format"`
-	Punctuate       bool   `json:"punctuate"`
-	ProfanityFilter bool   `json:"profanity_filter"`
-	FillerWords     bool   `json:"filler_words"`
-	MipOptIn        bool   `json:"mip_opt_in"`
+	Model           string   `json:"model"`
+	Language        string   `json:"language"`
+	Keyterms        []string `json:"keyterms"`
+	SmartFormat     bool     `json:"smart_format"`
+	Punctuate       bool     `json:"punctuate"`
+	ProfanityFilter bool     `json:"profanity_filter"`
+	FillerWords     bool     `json:"filler_words"`
+	MipOptIn        bool     `json:"mip_opt_in"`
 }
 
 type Config struct {

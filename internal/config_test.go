@@ -8,7 +8,7 @@ import (
 
 func TestLoadConfigDefaultsAndValidation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, []byte(`{"deepgram_api_key":"real-key"}`), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"deepgram_api_key":"real-key","transcription":{"keyterms":["Bulma","Xiaomi"]}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	config, err := LoadConfig(path)
@@ -20,6 +20,9 @@ func TestLoadConfigDefaultsAndValidation(t *testing.T) {
 	}
 	if config.Transcription.Model != "nova-3" || config.Transcription.Language != "en-US" {
 		t.Fatalf("unexpected transcription defaults: %+v", config.Transcription)
+	}
+	if len(config.Transcription.Keyterms) != 2 || config.Transcription.Keyterms[0] != "Bulma" {
+		t.Fatalf("unexpected keyterms: %v", config.Transcription.Keyterms)
 	}
 	if config.Transcription.MipOptIn {
 		t.Fatal("MIP participation enabled by default")

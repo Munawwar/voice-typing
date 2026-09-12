@@ -9,6 +9,7 @@
   "transcription": {
     "model": "nova-3",
     "language": "en-US",
+    "keyterms": [],
     "smart_format": true,
     "punctuate": true,
     "profanity_filter": true,

@@ -119,6 +119,7 @@ never starts a new session.
   "transcription": {
     "model": "nova-3",
     "language": "en-US",
+    "keyterms": ["Bulma", "Xiaomi", "Huawei"],
     "smart_format": true,
     "punctuate": true,
     "profanity_filter": true,
@@ -129,6 +130,9 @@ never starts a new session.
 ```
 
 You can find docs on the `transcription` configs at [deepgram's docs](https://developers.deepgram.com/reference/speech-to-text-api/listen-streaming).
+`keyterms` improves Nova-3's recognition of up to 100 specialized terms, such as
+brand and company names. Edit the installed list in
+`~/.config/voice-typing/config.json`; changes apply to the next recording session.
 `mip_opt_in` defaults to `false`; set it to `true` only if you consent to
 Deepgram using your audio under its Model Improvement Program.
 

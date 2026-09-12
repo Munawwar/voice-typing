@@ -132,6 +132,7 @@ func StreamTranscription(
 	options := &interfaces.LiveTranscriptionOptions{
 		Model:           ds.config.Transcription.Model,
 		Language:        ds.config.Transcription.Language,
+		Keyterm:         ds.config.Transcription.Keyterms,
 		SmartFormat:     ds.config.Transcription.SmartFormat,
 		Punctuate:       ds.config.Transcription.Punctuate,
 		ProfanityFilter: ds.config.Transcription.ProfanityFilter,
