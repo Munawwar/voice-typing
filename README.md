@@ -44,6 +44,7 @@ cp config.example.json config.json
 
 The installer will:
 - Install system dependencies (portaudio, typing tools)
+- On Wayland, ask before replacing legacy ydotool with the verified v1.0.4 client and daemon
 - Build the Go application
 - Install to `~/.local/bin`
 - Set up configuration directory (`~/.config/`)
@@ -171,10 +172,12 @@ Deepgram using your audio under its Model Improvement Program.
 ### Typing Issues
 - Install required tools (see `install.sh`)
 - For GNOME, if hotkey doesn't work: Check GNOME Settings → Keyboard → Custom Shortcuts
-- For Wayland: Ensure ydotool daemon is running
+- On Wayland, ydotool v1.0.4 or newer and its matching daemon are required.
+  This conflicts with Ubuntu's default ydotool version and may affect other
+  apps that use ydotool. Check active binaries with
+  `command -v ydotool ydotoold`; check the v1 daemon version with `ydotoold -V`.
 - Check display server: `echo $XDG_SESSION_TYPE`
 - Wayland specifics:
-  - Ensure the ydotool daemon is active (user or system service): `systemctl --user status ydotoold` or `sudo systemctl status ydotoold` (some packages use `ydotool.service`)
   - Add user to `input` group and re-login: `sudo usermod -a -G input $USER`
   - `wtype` is best-effort; some DEs sandbox key injection. If `wtype` fails, `ydotool` should work once the daemon and group permissions are correct.
   - Clipboard fallback requires `wl-copy`; install with: `sudo apt install wl-clipboard`

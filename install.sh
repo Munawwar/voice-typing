@@ -13,6 +13,11 @@ CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/voice-typing"
 BINARY_NAME="voice-typing"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 FORCE_BUILD=false
+YDOTOOL_VERSION="1.0.4"
+YDOTOOL_URL="https://github.com/ReimuNotMoe/ydotool/releases/download/v$YDOTOOL_VERSION/ydotool-release-ubuntu-latest"
+YDOTOOLD_URL="https://github.com/ReimuNotMoe/ydotool/releases/download/v$YDOTOOL_VERSION/ydotoold-release-ubuntu-latest"
+YDOTOOL_SHA256="daa83507a596d6839b7467540382dbdc6e4bf64ebfa4f7d6416e877d9a522c0c"
+YDOTOOLD_SHA256="3f14f96308935214c0fb154507360f7632e7deda1935dc2d538259fd9986ed36"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -53,75 +58,109 @@ install_packages() {
     fi
 }
 
-setup_ydotool_user_service() {
-    local daemon user_systemd_dir service_file
+setup_ydotool_daemon() {
+    local client daemon client_help daemon_output installed_version reply download_dir runtime_dir
+    local user_systemd_dir="$HOME/.config/systemd/user"
+    local service_file="$user_systemd_dir/ydotoold.service"
+    local needs_upgrade=true
+
+    client="$(command -v ydotool 2>/dev/null || true)"
     daemon="$(command -v ydotoold 2>/dev/null || true)"
-    user_systemd_dir="$HOME/.config/systemd/user"
-    service_file="$user_systemd_dir/ydotoold.service"
-    if [[ -z "$daemon" ]]; then
-        print_warning "ydotoold is unavailable; key injection may not work"
-        return 1
-    fi
-    if ! mkdir -p "$user_systemd_dir"; then
-        print_warning "Could not create $user_systemd_dir"
-        return 1
+    client_help="$([[ -n "$client" ]] && "$client" help 2>&1 || true)"
+    installed_version=""
+    if [[ "$client" == /usr/bin/ydotool && "$client_help" == *recorder* ]]; then
+        installed_version="$(dpkg-query -W -f='${Version}' ydotool 2>/dev/null || true)"
+    elif [[ -n "$daemon" ]]; then
+        daemon_output="$(timeout 2 "$daemon" --version 2>/dev/null || true)"
+        if [[ "$daemon_output" =~ v?([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            installed_version="${BASH_REMATCH[1]}"
+            if dpkg --compare-versions "$installed_version" ge "$YDOTOOL_VERSION"; then
+                needs_upgrade=false
+            fi
+        fi
     fi
 
-    if [[ ! -e "$service_file" ]]; then
-        if ! {
-            echo "# Managed by the voice-typing installer"
-            echo "[Unit]"
-            echo "Description=ydotool daemon (user)"
-            echo
-            echo "[Service]"
-            echo "ExecStart=$daemon -p %t/.ydotool_socket -P 0600"
-            echo "Restart=on-failure"
-            echo
-            echo "[Install]"
-            echo "WantedBy=default.target"
-        } > "$service_file"; then
-            print_warning "Could not create $service_file"
+    if [[ "$needs_upgrade" == true ]]; then
+        if [[ "$(uname -m)" != "x86_64" ]]; then
+            print_warning "ydotool $YDOTOOL_VERSION prebuilt binaries are only available for x86_64"
+            print_warning "Build ydotool $YDOTOOL_VERSION or newer from source, then rerun this installer"
             return 1
         fi
+        if [[ -n "$client" ]]; then
+            print_warning "The installed ydotool${installed_version:+ $installed_version} is incompatible with voice-typing"
+        else
+            print_warning "ydotool $YDOTOOL_VERSION or newer is required on Wayland"
+        fi
+        echo "The installer can disable existing ydotool services, install the official"
+        echo "ydotool $YDOTOOL_VERSION client and daemon globally in /usr/local/bin, and configure"
+        echo "one per-user daemon using the Wayland runtime socket."
+        if [[ ! -t 0 ]]; then
+            print_warning "Run the installer in a terminal to approve the ydotool upgrade"
+            return 1
+        fi
+        read -r -p "Replace the old ydotool installation and services? [y/N] " reply
+        if [[ ! "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+            print_warning "Keeping the existing ydotool installation"
+            return 1
+        fi
+
+        download_dir="$(mktemp -d)" || {
+            print_warning "Could not create a temporary download directory"
+            return 1
+        }
+        trap 'rm -f -- "$download_dir/ydotool" "$download_dir/ydotoold"; rmdir "$download_dir" 2>/dev/null || true' RETURN
+        print_info "Downloading official ydotool $YDOTOOL_VERSION binaries..."
+        if ! curl -fL --retry 3 -o "$download_dir/ydotool" "$YDOTOOL_URL" ||
+           ! curl -fL --retry 3 -o "$download_dir/ydotoold" "$YDOTOOLD_URL" ||
+           ! printf '%s  %s\n%s  %s\n' \
+                "$YDOTOOL_SHA256" "$download_dir/ydotool" \
+                "$YDOTOOLD_SHA256" "$download_dir/ydotoold" | sha256sum -c -; then
+            print_warning "Could not download and verify ydotool $YDOTOOL_VERSION"
+            return 1
+        fi
+
+        systemctl --user disable --now ydotoold.service ydotool.service >/dev/null 2>&1 || true
+        sudo systemctl disable --now ydotoold.service ydotool.service >/dev/null 2>&1 || true
+        if ! sudo install -m 0755 "$download_dir/ydotool" /usr/local/bin/ydotool ||
+           ! sudo install -m 0755 "$download_dir/ydotoold" /usr/local/bin/ydotoold; then
+            print_warning "Could not install ydotool $YDOTOOL_VERSION into /usr/local/bin"
+            return 1
+        fi
+        client="/usr/local/bin/ydotool"
+        daemon="/usr/local/bin/ydotoold"
+        installed_version="$YDOTOOL_VERSION"
+        print_status "Installed ydotool $YDOTOOL_VERSION"
+    else
+        print_status "Found compatible ydotool $installed_version at $client"
     fi
-    if ! systemctl --user daemon-reload >/dev/null 2>&1 ||
-       ! systemctl --user enable --now ydotoold >/dev/null 2>&1; then
-        print_warning "Could not start the user ydotoold service"
+
+    if ! mkdir -p "$user_systemd_dir" || ! {
+        echo "# Managed by the voice-typing installer"
+        echo "[Unit]"
+        echo "Description=ydotool daemon (user)"
+        echo
+        echo "[Service]"
+        echo "ExecStart=$daemon --socket-path=%t/.ydotool_socket"
+        echo "Restart=on-failure"
+        echo
+        echo "[Install]"
+        echo "WantedBy=default.target"
+    } > "$service_file"; then
+        print_warning "Could not create $service_file"
         return 1
     fi
-    print_status "Configured user ydotoold service"
-}
-
-setup_ydotool_daemon() {
-    print_info "Configuring ydotool daemon..."
-    if systemctl --user list-unit-files >/dev/null 2>&1; then
-        if systemctl --user list-unit-files 2>/dev/null | grep -q '^ydotoold\.service'; then
-            systemctl --user enable --now ydotoold >/dev/null 2>&1 && {
-                print_status "Enabled user ydotoold service"
-                return
-            }
-        elif systemctl --user list-unit-files 2>/dev/null | grep -q '^ydotool\.service'; then
-            systemctl --user enable --now ydotool >/dev/null 2>&1 && {
-                print_status "Enabled user ydotool service"
-                return
-            }
-        elif setup_ydotool_user_service; then
-            return
-        fi
+    if ! systemctl --user daemon-reload >/dev/null 2>&1 ||
+       ! systemctl --user enable ydotoold >/dev/null 2>&1 ||
+       ! systemctl --user restart ydotoold >/dev/null 2>&1; then
+        print_warning "Configured ydotoold, but it could not start; log out and back in after installation"
+        return 1
     fi
-
-    if systemctl list-unit-files 2>/dev/null | grep -q '^ydotoold\.service'; then
-        sudo systemctl enable --now ydotoold && {
-            print_status "Enabled system ydotoold service"
-            return
-        }
-    elif systemctl list-unit-files 2>/dev/null | grep -q '^ydotool\.service'; then
-        sudo systemctl enable --now ydotool && {
-            print_status "Enabled system ydotool service"
-            return
-        }
+    runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    if ! printf '' | "$client" type --file - >/dev/null 2>&1; then
+        print_warning "ydotool could not connect to the new daemon at $runtime_dir/.ydotool_socket"
+        return 1
     fi
-    print_warning "No working ydotool service was found"
+    print_status "Configured ydotool $installed_version user daemon"
 }
 
 install_application() {
@@ -232,12 +271,12 @@ if command -v apt >/dev/null 2>&1; then
     sudo apt update || print_warning "Could not refresh the apt package index"
     install_packages portaudio19-dev libnotify-bin || dependencies_failed=true
     if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
-        install_packages wtype ydotool wl-clipboard || dependencies_failed=true
-        setup_ydotool_daemon
+        install_packages curl wtype wl-clipboard || dependencies_failed=true
         if ! sudo usermod -a -G input "$USER"; then
             print_warning "Could not add $USER to the input group"
             dependencies_failed=true
         fi
+        setup_ydotool_daemon || dependencies_failed=true
     else
         install_packages xdotool xclip xsel || dependencies_failed=true
     fi
