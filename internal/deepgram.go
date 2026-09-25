@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	msginterfaces "github.com/deepgram/deepgram-go-sdk/v3/pkg/api/listen/v1/websocket/interfaces"
 	interfaces "github.com/deepgram/deepgram-go-sdk/v3/pkg/client/interfaces/v1"
@@ -161,7 +162,18 @@ func StreamTranscription(
 		}
 		return fmt.Errorf("connect to Deepgram WebSocket")
 	}
-	defer client.Stop()
+	defer func() {
+		done := make(chan struct{})
+		go func() {
+			client.Stop()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			log.Println("Timed out closing Deepgram WebSocket")
+		}
+	}()
 	if ready != nil {
 		ready()
 	}
@@ -188,8 +200,17 @@ func StreamTranscription(
 					continue
 				}
 			}
-			if err := client.WriteBinary(data); err != nil {
-				return fmt.Errorf("send audio to Deepgram: %w", err)
+			written := make(chan error, 1)
+			go func() { written <- client.WriteBinary(data) }()
+			select {
+			case err := <-written:
+				if err != nil {
+					return fmt.Errorf("send audio to Deepgram: %w", err)
+				}
+			case <-ctx.Done():
+				return nil
+			case <-time.After(5 * time.Second):
+				return fmt.Errorf("send audio to Deepgram: timed out")
 			}
 		}
 	}
